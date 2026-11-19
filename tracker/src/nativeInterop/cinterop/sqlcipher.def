@@ -1,0 +1,4 @@
+headers = sqlcipher_bridge.h
+package = sqlcipher
+compilerOpts = -DSQLITE_HAS_CODEC
+linkerOpts = -framework Security -framework CoreFoundation

@@ -1,0 +1,14 @@
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="database" path="exkmp-tracker-queue-v1.db" />
+        <exclude domain="database" path="exkmp-tracker-queue-v1.db-wal" />
+        <exclude domain="database" path="exkmp-tracker-queue-v1.db-shm" />
+        <exclude domain="file" path="tracker-session-v1.bin" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="database" path="exkmp-tracker-queue-v1.db" />
+        <exclude domain="database" path="exkmp-tracker-queue-v1.db-wal" />
+        <exclude domain="database" path="exkmp-tracker-queue-v1.db-shm" />
+        <exclude domain="file" path="tracker-session-v1.bin" />
+    </device-transfer>
+</data-extraction-rules>

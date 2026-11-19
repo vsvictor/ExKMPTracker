@@ -1,0 +1,7 @@
+<resources>
+    <string name="tracker_notification_title">Shift tracking active</string>
+    <string name="tracker_notification_stop">Stop tracking</string>
+    <string name="tracker_notification_text">Location is being recorded for your confirmed shift.</string>
+    <string name="tracker_notification_channel_name">Shift tracking</string>
+    <string name="tracker_notification_channel_description">Persistent status for an explicitly started tracking shift.</string>
+</resources>

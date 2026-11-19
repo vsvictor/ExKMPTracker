@@ -1,0 +1,7 @@
+<resources>
+    <string name="tracker_notification_title">Відстеження зміни активне</string>
+    <string name="tracker_notification_stop">Зупинити відстеження</string>
+    <string name="tracker_notification_text">Для підтвердженої зміни записується місцезнаходження.</string>
+    <string name="tracker_notification_channel_name">Відстеження зміни</string>
+    <string name="tracker_notification_channel_description">Постійний статус явно запущеного відстеження зміни.</string>
+</resources>
