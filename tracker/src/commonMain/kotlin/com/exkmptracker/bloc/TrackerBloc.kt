@@ -430,7 +430,8 @@ class TrackerBloc(
         }
         if (fix.source != LocationSource.network && guard.suspect(now)) return reject("GNSS time disagrees with server")
         val controls = controls(now)
-        val estimate = filter.fix(fix, controls.first, controls.second, state.value.activity == Activity.IN_VEHICLE)
+        val estimate = filter.fix(fix, controls.first, controls.second, state.value.activity == Activity.IN_VEHICLE,
+            guard.strongCn0(fix.monotonicSeconds))
             ?: return reject(filter.rejection ?: "Rejected fix")
         lastRaw = fix
         if (fix.isPreciseFix()) {

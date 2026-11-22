@@ -82,4 +82,6 @@ data class GnssEvidence(
     val uncertaintyMs: Double = 0.0,
     val meanAgcDb: Double? = null,
     val meanCn0DbHz: Double? = null,
+    /** Mean C/N0 of satellites used in the fix. Null when the receiver did not report them. */
+    val strongCn0DbHz: Double? = null,
 )

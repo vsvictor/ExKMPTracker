@@ -14,6 +14,7 @@ internal class TimeGuard {
         if (!value.monotonicSeconds.isFinite() || !value.uncertaintyMs.isFinite() ||
             value.uncertaintyMs < 0 || value.utcTimeMs?.isFinite() == false ||
             value.meanAgcDb?.isFinite() == false || value.meanCn0DbHz?.isFinite() == false ||
+            value.strongCn0DbHz?.let { !it.isFinite() || it < 0.0 } == true ||
             gnss?.let { value.monotonicSeconds <= it.monotonicSeconds } == true) return false
         val previous = gnss
         val agc = value.meanAgcDb
@@ -47,6 +48,14 @@ internal class TimeGuard {
         val utc = evidence.utcTimeMs ?: return false
         return abs(utc + (now - evidence.monotonicSeconds) * 1000 - serverNow(ref, now)) >
             2_000 + ref.uncertaintyMs + evidence.uncertaintyMs
+    }
+
+    /** C/N0 from a satellite-status sample within two seconds after the fix, or one second before it. */
+    fun strongCn0(at: Double): Double? {
+        val evidence = gnss ?: return null
+        val age = at - evidence.monotonicSeconds
+        if (age !in -1.0..2.0) return null
+        return evidence.strongCn0DbHz
     }
 
     private fun freshGnss(now: Double) =

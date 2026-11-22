@@ -26,6 +26,11 @@ The four-state EKF uses east/north metres, speed and clockwise heading:
 - GNSS/fused accuracy ≤ 65 m; network ≤ 150 m. Honest urban fixes stay in the
   filter. Their variance is the provider radius, with a 3 m floor, and network
   adds 30 m in quadrature so a cell/Wi-Fi radius cannot collapse the covariance.
+  On Android the GNSS/fused sigma is also scaled by the mean C/N0 of satellites
+  used in the fix: unchanged at ≥ 32 dB-Hz, tripled at ≤ 20 dB-Hz, linear between.
+  Fewer than four used satellites count as the weak end. A missing C/N0 report,
+  every iOS fix, and every network fix keep the unscaled radius. This does not
+  change the 25 m precise-fix rule.
 - Fix age in monotonic time: `-2 < age ≤ 10` seconds. Native providers preserve
   observation age; arrival time is never substituted for observation time.
 - A precise fix has accuracy ≤ 25 m and is not network. Network and coarser fixes

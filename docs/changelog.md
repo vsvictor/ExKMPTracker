@@ -2,6 +2,18 @@
 
 [Українською](changelog.uk.md) | **English**
 
+## 1.1.2
+
+On Android, GNSS and fused measurement variance widens when the satellites used in
+the fix are weak. The mean C/N0 of those satellites comes from `GnssStatus`. At
+32 dB-Hz and above the provider radius is unchanged. At 20 dB-Hz and below the
+effective sigma is tripled, with a linear scale between those points. Fewer than
+four satellites used in the fix counts as the weak end. The wider variance lowers
+the Kalman gain, so a multipath-prone fix pulls the pin less. A missing report does
+not widen anything. The 25 m precise-fix rule is unchanged. Network fixes are not
+scaled by C/N0. iOS still has no raw satellite measurements, so its variance is
+unchanged.
+
 ## 1.1.1
 
 The map circle is the filter radius, not the latest `CLLocation.horizontalAccuracy`.

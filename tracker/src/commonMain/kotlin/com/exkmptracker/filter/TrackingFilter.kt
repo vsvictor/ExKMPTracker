@@ -12,6 +12,34 @@ internal fun LocationFix.isPreciseFix(): Boolean =
 
 private const val PRECISE_FIX_ACCURACY_METERS = 25.0
 
+/** At or above this C/N0 the provider radius is used as reported. */
+internal const val STRONG_CN0_DB_HZ = 32.0
+
+/** At or below this C/N0 the GNSS/fused sigma is tripled. */
+internal const val WEAK_CN0_DB_HZ = 20.0
+
+/** Fewer satellites than this cannot confirm a healthy solution. */
+internal const val MIN_CN0_SATELLITES = 4
+
+/**
+ * Mean C/N0 of satellites used in the fix. An empty list means the receiver did not
+ * report a solution, so the provider radius stays unchanged. One to three satellites
+ * are capped at the weak end even when those few are loud.
+ */
+internal fun strongCn0FromUsed(usedCn0DbHz: List<Double>): Double? {
+    val used = usedCn0DbHz.filter { it.isFinite() && it > 0.0 }
+    if (used.isEmpty()) return null
+    val mean = used.average()
+    return if (used.size >= MIN_CN0_SATELLITES) mean else mean.coerceAtMost(WEAK_CN0_DB_HZ)
+}
+
+/** 1 at [STRONG_CN0_DB_HZ], 3 at [WEAK_CN0_DB_HZ], linear between, saturated outside. */
+internal fun weakCn0SigmaScale(strongCn0DbHz: Double?): Double {
+    val cn0 = strongCn0DbHz?.takeIf { it.isFinite() } ?: return 1.0
+    val deficit = ((STRONG_CN0_DB_HZ - cn0) / (STRONG_CN0_DB_HZ - WEAK_CN0_DB_HZ)).coerceIn(0.0, 1.0)
+    return 1.0 + 2.0 * deficit
+}
+
 class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
     private var x = DoubleArray(4)
     private var p = Array(4) { DoubleArray(4) }
@@ -37,7 +65,7 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
     }
 
     fun fix(fix: LocationFix, acceleration: Double = 0.0, yawRate: Double = 0.0,
-            constrainLateral: Boolean = false): TrackEstimate? {
+            constrainLateral: Boolean = false, strongCn0DbHz: Double? = null): TrackEstimate? {
         rejection = validate(fix)
         if (rejection != null) return null
         val previous = lastFix
@@ -53,7 +81,7 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
                 ) return reject("Implausible position after signal gap")
             }
         }
-        val variance = positionVariance(fix)
+        val variance = positionVariance(fix, strongCn0DbHz)
         val gap = if (previous == null) Double.POSITIVE_INFINITY else fix.monotonicSeconds - previous.monotonicSeconds
         if (previous == null || gap > config.predictionHorizonSeconds) {
             // A 50–65 m Core Location sample is still labelled gps on iOS. It must not
@@ -307,10 +335,16 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
         clearRejectedCluster()
     }
 
-    /** Provider radii are optimistic. Network error is wider than the reported radius. */
-    private fun positionVariance(fix: LocationFix): Double {
+    /**
+     * Provider radii are optimistic. Network error is wider than the reported radius.
+     * A weak Android C/N0 widens GNSS and fused sigma only; it does not reclassify the fix.
+     */
+    private fun positionVariance(fix: LocationFix, strongCn0DbHz: Double? = null): Double {
         val extra = if (fix.source == LocationSource.network) NETWORK_SIGMA_METERS else 0.0
-        val sigma = max(MIN_POSITION_SIGMA_METERS, hypot(fix.accuracyMeters, extra))
+        val reported = hypot(fix.accuracyMeters, extra)
+        val scaled = if (fix.source == LocationSource.network) reported
+            else reported * weakCn0SigmaScale(strongCn0DbHz)
+        val sigma = max(MIN_POSITION_SIGMA_METERS, scaled)
         return sigma * sigma / CHI_68
     }
 

@@ -2,7 +2,7 @@
 
 [Українською](tracking.uk.md) | **English**
 
-This document describes the ExKMPTracker 1.1.1 positioning pipeline: sources,
+This document describes the ExKMPTracker 1.1.2 positioning pipeline: sources,
 estimation, predictions, and the path of a point from a native event to server
 acknowledgement. It is a Kotlin Multiplatform implementation, not a Flutter wrapper.
 The short contract is in [algorithm.md](algorithm.md).
@@ -137,8 +137,11 @@ For a symmetric 2D Gaussian the radius that contains 68% of the probability mass
 `r² = χ²₂(0.68) · σ²`, where `χ²₂(0.68) = 2.27886856637673`. Therefore:
 
 - per-axis measurement variance is `σ² = σ_eff² / 2.27886856637673`;
-- `σ_eff = max(3 m, accuracy)` for GNSS/fused. For network, 30 m is added in quadrature
-  first: an optimistic cell or Wi-Fi radius cannot collapse the covariance;
+- `σ_eff = max(3 m, accuracy × cn0Scale)` for GNSS/fused. `cn0Scale` is 1 at a mean
+  C/N0 of the satellites used in the fix ≥ 32 dB-Hz, 3 at ≤ 20 dB-Hz, and linear
+  between. Fewer than four used satellites use the weak end. No C/N0 report means
+  scale 1, which is every iOS fix. For network, 30 m is added in quadrature first
+  and C/N0 is not applied: an optimistic cell or Wi-Fi radius cannot collapse the covariance;
 - the filter's reported accuracy (section 4.7) is the inverse of the same 68% convention.
 
 ### 4.3 Initialization
@@ -425,6 +428,8 @@ contract is described in [algorithm.md](algorithm.md) and [coopnav.md](coopnav.m
 | GNSS/fused accuracy gate | 65 m | `maxGnssAccuracyMeters` |
 | Network accuracy gate | 150 m | `maxNetworkAccuracyMeters` |
 | Position σ floor | 3 m | `positionVariance` |
+| C/N0 full trust / triple sigma | ≥ 32 / ≤ 20 dB-Hz, linear between | `weakCn0SigmaScale` |
+| Satellites in that C/N0 mean | ≥ 4 used in the fix | `strongCn0FromUsed` |
 | Extra network σ | 30 m in quadrature | `positionVariance` |
 | Tangent-plane recenter | 2 km | `recenterTangentPlane` |
 | Prediction quality limit | 100 m | `maxEstimateAccuracyMeters` |

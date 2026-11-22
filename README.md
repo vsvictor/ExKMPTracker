@@ -1,4 +1,4 @@
-# ExKMPTracker 1.1.1
+# ExKMPTracker 1.1.2
 
 [Українська](README.uk.md)
 
@@ -71,7 +71,7 @@ To consume from another Gradle project, add this composite build to its
 includeBuild("/Users/victor/ExKMPTracker")
 ```
 
-Then add `implementation("com.exkmptracker:tracker:1.1.1")` in the appropriate
+Then add `implementation("com.exkmptracker:tracker:1.1.2")` in the appropriate
 KMP source set or Android module. Match the Kotlin/AGP toolchain in this build.
 For Swift, build and link the XCFramework described in the iOS guide.
 
