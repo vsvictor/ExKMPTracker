@@ -104,7 +104,14 @@ being mistaken for a stop when pressure data is available.
 
 ## Persistence and delivery
 
-Record when distance ≥ 25 m, moving heading change ≥ 10°, or elapsed time ≥ 30 s.
+Recording follows speed. The configured 25 m / 10° / 30 s gates apply at 8 m/s.
+At about 2 m/s and below they widen to 100 m / 30° / 120 s. At 20 m/s and above
+they tighten to 10 m / 6° / 12 s. A start from under 1 m/s to at least 2 m/s,
+a speed change of at least 5 m/s, a turn, a return from network/dead reckoning/
+stationary to GPS or fused, the first stationary point, and a 40 m accuracy
+worsening or a recovery to ≤ 25 m also record immediately. Ingest follows the
+same scale: 30 s while slow, 10 s at 8 m/s, and 5 s at highway speed. The server
+stores every accepted point and does not choose this cadence.
 The throttle commits only after durable append succeeds. Prediction/stationary
 points have null raw fields; network points omit speed/course via JSON null.
 Identifiers contain 16 secure random bytes in lowercase hex.

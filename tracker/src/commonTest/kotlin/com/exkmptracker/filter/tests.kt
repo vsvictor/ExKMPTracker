@@ -172,8 +172,10 @@ class TrackingFilterTests {
 }
 
 class TrackThrottleTests {
-    private fun point(time: Double = 1.0, lat: Double = 50.0, heading: Double = 0.0, speed: Double = 0.0) =
-        TrackEstimate(lat, 30.0, 5.0, speed, heading, time, LocationSource.gps)
+    private fun point(
+        time: Double = 1.0, lat: Double = 50.0, heading: Double = 0.0, speed: Double = 0.0,
+        accuracy: Double = 5.0, source: LocationSource = LocationSource.gps,
+    ) = TrackEstimate(lat, 30.0, accuracy, speed, heading, time, source)
 
     @Test fun throttleCommitsOnlyWhenRecordedIsCalled() {
         val throttle = TrackThrottle()
@@ -181,21 +183,73 @@ class TrackThrottleTests {
         assertTrue(throttle.shouldRecord(point()))
         throttle.recorded(point())
         assertFalse(throttle.shouldRecord(point(time = 2.0)))
-        assertTrue(throttle.shouldRecord(point(time = 31.0)))
+        assertFalse(throttle.shouldRecord(point(time = 31.0)))
+        assertTrue(throttle.shouldRecord(point(time = 121.0)))
     }
 
-    @Test fun distanceAndMovingTurnCanIndependentlyTriggerRecord() {
+    @Test fun cityReferenceKeepsTheConfiguredGates() {
         val throttle = TrackThrottle()
-        throttle.recorded(point())
-        assertTrue(throttle.shouldRecord(point(lat = 50.0003)))
-        assertFalse(throttle.shouldRecord(point(heading = 11.0)))
-        assertTrue(throttle.shouldRecord(point(heading = 11.0, speed = 2.0)))
+        throttle.recorded(point(speed = 8.0))
+        assertFalse(throttle.shouldRecord(point(time = 30.0, speed = 8.0)))
+        assertTrue(throttle.shouldRecord(point(time = 31.0, speed = 8.0)))
+        assertTrue(throttle.shouldRecord(point(lat = 50.0003, speed = 8.0)))
+        assertFalse(throttle.shouldRecord(point(heading = 9.0, speed = 8.0)))
+        assertTrue(throttle.shouldRecord(point(heading = 10.0, speed = 8.0)))
+    }
+
+    @Test fun slowSpeedUsesAWiderGateAndFastSpeedATighterOne() {
+        val slow = TrackThrottle()
+        slow.recorded(point())
+        assertFalse(slow.shouldRecord(point(lat = 50.0003)))
+        assertTrue(slow.shouldRecord(point(lat = 50.001)))
+        val fast = TrackThrottle()
+        fast.recorded(point(speed = 20.0))
+        assertTrue(fast.shouldRecord(point(lat = 50.0003, speed = 20.0)))
+        assertFalse(fast.shouldRecord(point(heading = 5.0, speed = 20.0)))
+        assertTrue(fast.shouldRecord(point(heading = 6.0, speed = 20.0)))
+        val crawl = TrackThrottle()
+        crawl.recorded(point(speed = 2.0))
+        assertFalse(crawl.shouldRecord(point(heading = 29.0, speed = 2.0)))
+        assertTrue(crawl.shouldRecord(point(heading = 30.0, speed = 2.0)))
     }
 
     @Test fun bearingDifferenceWrapsAcrossNorth() {
         val throttle = TrackThrottle()
-        throttle.recorded(point(heading = 359.0))
+        throttle.recorded(point(heading = 359.0, speed = 10.0))
         assertFalse(throttle.shouldRecord(point(heading = 1.0, speed = 10.0)))
+    }
+
+    @Test fun departureBrakeAndGnssRecoveryRecordImmediately() {
+        val throttle = TrackThrottle()
+        throttle.recorded(point())
+        assertFalse(throttle.shouldRecord(point(time = 2.0, speed = 1.5)))
+        assertTrue(throttle.shouldRecord(point(time = 2.0, speed = 2.0)))
+        throttle.recorded(point(speed = 20.0))
+        assertFalse(throttle.shouldRecord(point(time = 2.0, speed = 16.0)))
+        assertTrue(throttle.shouldRecord(point(time = 2.0, speed = 15.0)))
+        throttle.recorded(point(source = LocationSource.deadReckoning))
+        assertTrue(throttle.shouldRecord(point(time = 2.0, source = LocationSource.gps)))
+        throttle.recorded(point())
+        assertTrue(throttle.shouldRecord(point(time = 2.0, source = LocationSource.stationary)))
+        throttle.recorded(point(source = LocationSource.stationary))
+        assertFalse(throttle.shouldRecord(point(time = 11.0, source = LocationSource.stationary)))
+    }
+
+    @Test fun accuracyCollapseAndRecoveryRecordImmediately() {
+        val throttle = TrackThrottle()
+        throttle.recorded(point(accuracy = 10.0))
+        assertTrue(throttle.shouldRecord(point(time = 2.0, accuracy = 50.0)))
+        throttle.recorded(point(accuracy = 60.0))
+        assertFalse(throttle.shouldRecord(point(time = 2.0, accuracy = 40.0)))
+        assertTrue(throttle.shouldRecord(point(time = 2.0, accuracy = 20.0)))
+    }
+
+    @Test fun flushIntervalFollowsTheSameSpeedScale() {
+        val throttle = TrackThrottle()
+        assertEquals(30.0, throttle.flushIntervalSeconds(0.0))
+        assertEquals(20.0, throttle.flushIntervalSeconds(4.0))
+        assertEquals(10.0, throttle.flushIntervalSeconds(8.0))
+        assertEquals(5.0, throttle.flushIntervalSeconds(20.0))
     }
 }
 

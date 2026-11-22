@@ -25,8 +25,8 @@ Key files:
  accelerometer/gyroscope ──┤   clock agreement         Joseph update
  magnetometer ─────────────┤   accuracy gates          χ² and unstick          │
  step counter ─────────────┤   anti-fake checks                               ▼
- activity transitions ─────┘                                     TrackThrottle (25 m /
- GNSS measurements                                                10° / 30 s)
+ activity transitions ─────┘                                     TrackThrottle
+ GNSS measurements                                                (speed, turn, gap)
  (AGC, C/N0, clock)                                                        │
                                                                            ▼
                                                         encrypted SQLCipher queue (FIFO)
@@ -348,12 +348,28 @@ Two clocks are compared with the device:
 
 ## 8. Recording: throttle and point model
 
-An accepted estimate is recorded only when `TrackThrottle.shouldRecord` passes at least
-one condition:
+An accepted estimate is recorded only when `TrackThrottle.shouldRecord` passes.
+The configured 25 m / 10° / 30 s gates are the city reference at **8 m/s**. The scale
+is `8 / max(speed, 1)`, clamped to 0.4..4, and each gate is clamped again:
 
-- distance from the last recorded point ≥ **25 m** (haversine);
-- course change ≥ **10°** while moving (> 1 m/s);
-- **30 s** since the last recorded point.
+| Speed | Distance | Turn | Longest gap |
+|---|---|---|---|
+| ≤ 2 m/s | 100 m | 30°, and only above 0.5 m/s | 120 s |
+| 4 m/s | 50 m | 20° above 1 m/s | 60 s |
+| 8 m/s | 25 m | 10° above 1 m/s | 30 s |
+| ≥ 20 m/s | 10 m | 6° above 1 m/s | 12 s |
+
+Distance uses haversine. These rows are the default `TrackerConfig`; a host value
+is multiplied by the same scale, then clamped to 8–100 m, 6–30°, and 5–120 s.
+
+A point is also recorded immediately when:
+
+- speed rises from under 1 m/s to at least 2 m/s (departure);
+- speed changes by at least 5 m/s (brake or acceleration);
+- course changes by the turn gate above;
+- a `gps` or `fused` fix follows `network`, `deadReckoning`, or `stationary`;
+- the source becomes `stationary` (the parking point, then the slow gap);
+- accuracy worsens by at least 40 m, or improves by at least 25 m and is now ≤ 25 m.
 
 The throttle commits its state (`recorded`) only **after** the point is durably appended
 to the encrypted SQLCipher queue, so a storage failure does not silently drop the point.
@@ -374,9 +390,12 @@ Queued point contents:
 
 ## 9. Delivery: flush and acknowledgement
 
-Each tick checks that at least 10 s have passed since the previous flush and schedules one
-request outside the event handler. The result returns as `Message.Flushed`. The timeout
-is 30 s. Flush:
+Each tick schedules one request outside the event handler when the speed-scaled flush
+interval has elapsed. With the default config that is **30 s** at 2 m/s and below,
+**10 s** at 8 m/s, and **5 s** from 20 m/s up, clamped to 5–30 s. The result returns
+as `Message.Flushed`. The timeout is 30 s. An empty queue does not call
+`tracking.ingest`. The server stores every accepted point and does not thin or
+retime the track. Flush:
 
 1. refreshes the server time reference when it is older than 60 s (section 7);
 2. reads a FIFO batch of at most **100** points from the encrypted queue; any unreadable
@@ -432,8 +451,11 @@ contract is described in [algorithm.md](algorithm.md) and [coopnav.md](coopnav.m
 | Stop hold IMU-motion reset | 5 s without a GNSS/fused fix | `TrackerBloc` |
 | Stop-point refinement | once, ≥ 10 non-network fixes, ≥ 2× tighter, floor best/4 | `StopAnchor` |
 | Network redundancy window | 10 s after a GNSS/fused fix | `TrackerBloc` |
-| Throttle | 25 m / 10° / 30 s | `TrackThrottle` |
+| Throttle at 8 m/s | 25 m / 10° / 30 s | `TrackThrottle` |
+| Throttle at ≤ 2 m/s | 100 m / 30° / 120 s | `TrackThrottle` |
+| Throttle at ≥ 20 m/s | 10 m / 6° / 12 s | `TrackThrottle` |
+| Departure / speed step | < 1 → ≥ 2 m/s, or \|Δv\| ≥ 5 m/s | `TrackThrottle` |
 | Fix age window | −2…+10 s | `TrackerBloc` |
 | Clock disagreement tolerance | 2000 ms + uncertainties | `TimeGuard` |
-| Flush interval / batch / timeout | ≥ 10 s / ≤ 100 points / 30 s | `TrackerBloc` |
+| Flush interval / batch / timeout | 5–30 s by speed / ≤ 100 points / 30 s | `TrackerBloc` |
 | `serverTime` refresh | every 60 s, valid for 300 s | `TimeGuard` |

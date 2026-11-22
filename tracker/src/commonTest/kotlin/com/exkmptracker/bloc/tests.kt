@@ -106,10 +106,10 @@ class TrackerBlocTests {
         f.bloc.dispatch(TrackerEvent.Start(session))
         f.fix()
         runCurrent()
-        f.clock.now = 32.0
+        f.clock.now = 121.0
         f.fix()
         runCurrent()
-        f.clock.now = 63.0
+        f.clock.now = 241.0
         f.fix()
         runCurrent()
         val original = f.queue.peek(session.identity, 100)

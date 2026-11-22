@@ -96,9 +96,25 @@ describe a Flutter UI isolate, a Dart `MapMatcher`, `sensors_plus`, or Room.
 baseline taken at counter creation, and an iOS method that throws. This repository
 has no statistics screen.
 
+### Send cadence
+
+1.0.0 recorded a point every 25 m, every 10° while faster than 1 m/s, or every 30 s,
+and flushed the queue every 10 s. 1.1.0 scales those configured gates with speed.
+They still apply unchanged at 8 m/s. At 2 m/s and below the default schedule is
+100 m, 30°, and 120 s. At 20 m/s and above it is 10 m, 6°, and 12 s. A point is
+also kept at once for a departure (under 1 m/s to at least 2 m/s), a speed change
+of at least 5 m/s, the speed-scaled turn, the first precise fix after network,
+dead reckoning or a stop, the first stationary point, and a 40 m accuracy drop or
+a recovery to 25 m or better.
+
+The ingest attempt uses the same scale: 30 s while slow, 10 s at 8 m/s, and 5 s
+at highway speed. An empty queue still does not call `tracking.ingest`. ExServerTracker
+accepts and stores every valid point. It has no speed, no minimum spacing and no
+way to slow the phone down before the point is sent, so the cadence stays on the
+client. The batch cap remains 100 points.
+
 ### Unchanged
 
-- Record throttle defaults: 25 m, 10°, 30 s.
 - Prediction horizon 15 s and uncertainty limit 100 m.
 - No bundled RTK service and no road graph. `MapMatcher` stays off unless the host injects one.
 - SQLCipher queue, owner partitioning, and exact FIFO-prefix acknowledgement.
