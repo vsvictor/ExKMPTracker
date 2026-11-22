@@ -8,12 +8,14 @@ enum class BoxUnits { INPUT_PIXELS, NORMALIZED }
 data class YoloConfig(
     val classMapping: Map<Int, VehicleClass>,
     val boxUnits: BoxUnits,
+    val classCount: Int = COCO_CLASS_COUNT,
     val scoreThreshold: Float = 0.35f,
     val nmsIouThreshold: Float = 0.45f,
     val maxDetections: Int = 32,
 ) {
     init {
-        require(classMapping.isNotEmpty() && classMapping.keys.all { it in 0..79 })
+        require(classCount == COCO_CLASS_COUNT || classCount == UKRAINIAN_CLASS_COUNT)
+        require(classMapping.isNotEmpty() && classMapping.keys.all { it in 0 until classCount })
         require(scoreThreshold > 0 && scoreThreshold <= 1)
         require(nmsIouThreshold > 0 && nmsIouThreshold < 1)
         require(maxDetections in 1..128)
@@ -24,8 +26,26 @@ data class YoloConfig(
         fun cocoVehicles(units: BoxUnits) = YoloConfig(
             mapOf(2 to VehicleClass.CAR, 5 to VehicleClass.BUS, 7 to VehicleClass.TRUCK), units,
         )
+
+        /**
+         * Four-class head trained for Ukrainian roads.
+         * Indices match `tools/coopnav-dataset`: 0 car, 1 truck, 2 bus, 3 trolleybus.
+         */
+        fun ukrainianVehicles(units: BoxUnits) = YoloConfig(
+            mapOf(
+                0 to VehicleClass.CAR,
+                1 to VehicleClass.TRUCK,
+                2 to VehicleClass.BUS,
+                3 to VehicleClass.TROLLEYBUS,
+            ),
+            units,
+            classCount = UKRAINIAN_CLASS_COUNT,
+        )
     }
 }
+
+internal const val COCO_CLASS_COUNT = 80
+internal const val UKRAINIAN_CLASS_COUNT = 4
 
 internal interface YoloBackend {
     val width: Int
@@ -38,25 +58,31 @@ internal class OutputLayout(shape: IntArray) {
     private val dimensions = when {
         shape.size == 2 -> shape
         shape.size == 3 && shape[0] == 1 -> shape.copyOfRange(1, 3)
-        else -> throw IllegalArgumentException("Expected [N,84], [84,N] or a leading singleton batch")
+        else -> throw IllegalArgumentException("Expected [N,C], [C,N] or a leading singleton batch")
     }
+    val channels: Int
     val channelsFirst: Boolean
     val count: Int
 
     init {
-        require((dimensions[0] == 84) xor (dimensions[1] == 84)) {
-            "Expected one unambiguous axis of size 84 (xywh + 80 class probabilities)"
+        val known = listOf(dimensions[0], dimensions[1]).filter { it == COCO_CHANNELS || it == UKRAINIAN_CHANNELS }
+        require(known.size == 1) {
+            "Expected one unambiguous axis of size $UKRAINIAN_CHANNELS or $COCO_CHANNELS (xywh + 4 or 80 class probabilities)"
         }
-        channelsFirst = dimensions[0] == 84
+        channels = known.single()
+        channelsFirst = dimensions[0] == channels
         count = dimensions[if (channelsFirst) 1 else 0]
         require(count in 1..100_000) { "Unsupported YOLO candidate count" }
     }
 
-    fun index(row: Int, channel: Int) = if (channelsFirst) channel * count + row else row * 84 + channel
+    fun index(row: Int, channel: Int) = if (channelsFirst) channel * count + row else row * channels + channel
 }
 
+internal const val COCO_CHANNELS = 4 + COCO_CLASS_COUNT
+internal const val UKRAINIAN_CHANNELS = 4 + UKRAINIAN_CLASS_COUNT
+
 internal class YoloOutput(val layout: OutputLayout, val values: FloatArray) {
-    init { require(values.size == layout.count * 84) }
+    init { require(values.size == layout.count * layout.channels) }
     operator fun get(row: Int, channel: Int) = values[layout.index(row, channel)]
 }
 
@@ -115,10 +141,13 @@ internal fun decode(output: YoloOutput, letterbox: Letterbox, config: YoloConfig
     val candidates = ArrayList<Detection>()
     val xScale = if (config.boxUnits == BoxUnits.NORMALIZED) letterbox.width.toDouble() else 1.0
     val yScale = if (config.boxUnits == BoxUnits.NORMALIZED) letterbox.height.toDouble() else 1.0
+    require(config.classCount + 4 == output.layout.channels) {
+        "YOLO head has ${output.layout.channels - 4} classes; YoloConfig expects ${config.classCount}"
+    }
     for (row in 0 until output.layout.count) {
         var best = -1
         var score = -1f
-        for (c in 0..79) {
+        for (c in 0 until config.classCount) {
             val s = output[row, c + 4]
             require(s in 0f..1f) { "Unsupported YOLO class score: expected finite probabilities (not logits)" }
             if (s > score) {

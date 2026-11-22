@@ -70,7 +70,7 @@ private class CoreMlYoloBackend(model: MLModel) : YoloBackend {
             outputConstraint.dataType == MLMultiArrayDataTypeDouble) { "Expected Float32 or Double Core ML output" }
         outputShape = dimensions(outputConstraint.shape)
         val layout = OutputLayout(outputShape)
-        result = YoloOutput(layout, FloatArray(layout.count * 84))
+        result = YoloOutput(layout, FloatArray(layout.count * layout.channels))
 
         when (input.type) {
             MLFeatureTypeImage -> {

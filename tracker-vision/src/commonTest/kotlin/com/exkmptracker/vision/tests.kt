@@ -64,8 +64,31 @@ class VisionTests {
     }
 
     @Test fun rejectsUnknownAndAmbiguousTensorShapes() {
-        for (shape in listOf(intArrayOf(84, 84), intArrayOf(1, 8400, 85), intArrayOf(2, 84, 32))) {
+        for (shape in listOf(intArrayOf(84, 84), intArrayOf(8, 84), intArrayOf(1, 8400, 85), intArrayOf(2, 84, 32))) {
             assertFailsWith<IllegalArgumentException> { OutputLayout(shape) }
+        }
+    }
+
+    @Test fun decodesUkrainianFourClassHeadIncludingTrolleybus() {
+        val letterbox = Letterbox(640, 320, 320, 320)
+        val config = YoloConfig.ukrainianVehicles(BoxUnits.NORMALIZED)
+        assertEquals(VehicleClass.TROLLEYBUS, config.classMapping[3])
+        for (shape in listOf(intArrayOf(1, 3, 8), intArrayOf(8, 3))) {
+            val layout = OutputLayout(shape)
+            val tensor = FloatArray(3 * 8)
+            fun add(row: Int, cls: Int, score: Float) {
+                listOf(.5f, .5f, .25f, .25f).forEachIndexed { column, v -> tensor[layout.index(row, column)] = v }
+                tensor[layout.index(row, cls + 4)] = score
+            }
+            add(0, 3, .91f)
+            add(1, 2, .4f)
+            add(2, 0, .2f)
+            val output = decode(YoloOutput(layout, tensor), letterbox, config)
+            assertEquals(listOf(3, 2), output.map { it.classId })
+        }
+        val coco = YoloOutput(OutputLayout(intArrayOf(8, 2)), FloatArray(16))
+        assertFailsWith<IllegalArgumentException> {
+            decode(coco, letterbox, YoloConfig.cocoVehicles(BoxUnits.NORMALIZED))
         }
     }
 

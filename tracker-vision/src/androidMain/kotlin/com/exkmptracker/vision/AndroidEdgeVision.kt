@@ -161,8 +161,8 @@ private class AndroidYoloBackend(private val interpreter: Interpreter, private v
         require(destination.dataType() == DataType.FLOAT32) { "Expected FLOAT32 TFLite output" }
         val layout = OutputLayout(destination.shape())
         input = buffer(width * height * 3 * Float.SIZE_BYTES)
-        output = buffer(layout.count * 84 * Float.SIZE_BYTES)
-        result = YoloOutput(layout, FloatArray(layout.count * 84))
+        output = buffer(layout.count * layout.channels * Float.SIZE_BYTES)
+        result = YoloOutput(layout, FloatArray(layout.count * layout.channels))
     }
 
     override fun predict(rgb: ByteArray): YoloOutput {
