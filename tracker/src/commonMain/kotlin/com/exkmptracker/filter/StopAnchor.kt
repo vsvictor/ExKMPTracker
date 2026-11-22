@@ -31,13 +31,14 @@ internal class StopAnchor {
     fun shouldRelease(fix: LocationFix): Boolean {
         val held = anchor ?: return false
         if (fix.source == LocationSource.network) return false
-        return fix.speedMps > 1.5 || (fix.accuracyMeters <= 20.0 &&
-            distanceMeters(held.latitude, held.longitude, fix.latitude, fix.longitude) > max(50.0, 3 * fix.accuracyMeters))
+        val moved = distanceMeters(held.latitude, held.longitude, fix.latitude, fix.longitude)
+        return fix.speedMps > RELEASE_SPEED_MPS ||
+            moved > max(RELEASE_DISTANCE_METERS, 2.5 * fix.accuracyMeters)
     }
 
     fun add(fix: LocationFix) {
         val held = anchor ?: return
-        if (fix.source == LocationSource.network || fix.accuracyMeters > 20.0) return
+        if (fix.source == LocationSource.network) return
         if (fromNetwork) {
             anchor = held.copy(latitude = fix.latitude, longitude = fix.longitude, accuracyMeters = fix.accuracyMeters)
             fromNetwork = false
@@ -60,5 +61,14 @@ internal class StopAnchor {
     }
 
     fun estimate(now: Double): TrackEstimate? =
-        anchor?.let { it.copy(monotonicSeconds = now, accuracyMeters = it.accuracyMeters + max(0.0, now - began) * 0.1) }
+        anchor?.let {
+            val growth = min(ACCURACY_GROWTH_CAP_METERS, max(0.0, now - began) * 0.1)
+            it.copy(monotonicSeconds = now, accuracyMeters = it.accuracyMeters + growth)
+        }
+
+    private companion object {
+        const val RELEASE_SPEED_MPS = 1.0
+        const val RELEASE_DISTANCE_METERS = 20.0
+        const val ACCURACY_GROWTH_CAP_METERS = 15.0
+    }
 }

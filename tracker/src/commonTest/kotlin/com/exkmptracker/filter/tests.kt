@@ -17,10 +17,41 @@ class TrackingFilterTests {
     }
 
     @Test fun sourceSpecificAccuracyThresholdsAreInclusive() {
-        assertNotNull(TrackingFilter().fix(fix(accuracy = 20.0)))
-        assertNull(TrackingFilter().fix(fix(accuracy = 20.001)))
-        assertNotNull(TrackingFilter().fix(fix(accuracy = 50.0, source = LocationSource.network)))
-        assertNull(TrackingFilter().fix(fix(accuracy = 50.001, source = LocationSource.network)))
+        assertNotNull(TrackingFilter().fix(fix(accuracy = 65.0)))
+        assertNull(TrackingFilter().fix(fix(accuracy = 65.001)))
+        assertNotNull(TrackingFilter().fix(fix(accuracy = 150.0, source = LocationSource.network)))
+        assertNull(TrackingFilter().fix(fix(accuracy = 150.001, source = LocationSource.network)))
+    }
+
+    @Test fun positionSigmaHasFloorAndNetworkIsWidened() {
+        val gnss = assertNotNull(TrackingFilter().fix(fix(accuracy = 1.0)))
+        assertEquals(3.0, gnss.accuracyMeters, 1e-6)
+        val network = assertNotNull(TrackingFilter().fix(fix(accuracy = 50.0, source = LocationSource.network)))
+        assertEquals(hypot(50.0, 30.0), network.accuracyMeters, 1e-6)
+    }
+
+    @Test fun slowSpeedIsIntegratedInsteadOfSnappedToZero() {
+        val filter = TrackingFilter()
+        filter.fix(fix(speed = 0.2))
+        val predicted = assertNotNull(filter.predict(2.0, 0.0, 0.0))
+        assertTrue(predicted.speedMps > 0.1, "speed was ${predicted.speedMps}")
+    }
+
+    @Test fun courseUpdatesWhileWalking() {
+        val filter = TrackingFilter()
+        filter.fix(fix(speed = 1.0, heading = 0.0).copy(bearingAccuracyDegrees = 1.0))
+        val next = assertNotNull(filter.fix(fix(time = 2.0, lat = 50.000009, speed = 1.0, heading = 90.0)
+            .copy(bearingAccuracyDegrees = 1.0)))
+        assertTrue(next.bearingDegrees > 10.0, "bearing was ${next.bearingDegrees}")
+    }
+
+    @Test fun threeAgreeingOutliersReplaceABiasedLock() {
+        val filter = TrackingFilter()
+        filter.fix(fix())
+        assertNull(filter.fix(fix(time = 2.0, lat = 50.01)))
+        assertNull(filter.fix(fix(time = 3.0, lat = 50.01)))
+        val recovered = assertNotNull(filter.fix(fix(time = 4.0, lat = 50.01)))
+        assertEquals(50.01, recovered.latitude, 1e-9)
     }
 
     @Test fun invalidInputsAreRejected() {
@@ -189,10 +220,17 @@ class StopAnchorTests {
     @Test fun releaseHasSpeedHysteresisAndIgnoresNetworkDisplacement() {
         val stop = StopAnchor()
         stop.begin(estimate())
-        assertFalse(stop.shouldRelease(fix(speed = 1.5)))
-        assertTrue(stop.shouldRelease(fix(speed = 1.501)))
+        assertFalse(stop.shouldRelease(fix(speed = 1.0)))
+        assertTrue(stop.shouldRelease(fix(speed = 1.001)))
         assertFalse(stop.shouldRelease(fix(lat = 51.0, speed = 20.0, source = LocationSource.network)))
+        assertFalse(stop.shouldRelease(fix(lat = 50.0001)))
         assertTrue(stop.shouldRelease(fix(lat = 50.001)))
+    }
+
+    @Test fun stationaryUncertaintyGrowthIsCapped() {
+        val stop = StopAnchor()
+        stop.begin(estimate())
+        assertEquals(23.0, assertNotNull(stop.estimate(10_000.0)).accuracyMeters, 1e-6)
     }
 
     @Test fun networkAnchorIsReplacedByFirstPreciseFix() {

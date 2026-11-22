@@ -68,6 +68,8 @@ class TrackerBloc(
     private var movingSince: Double? = null
     private var compassOffset = 0.0
     private var pendingStill = false
+    private var sawPreciseMotion = false
+    private var consecutiveSlowPreciseFixes = 0
     private var cooperativeGeneration = 0L
     private var cooperativeTimer: Job? = null
     private var cooperativeJob: Job? = null
@@ -184,6 +186,7 @@ class TrackerBloc(
             pendingStill = false
             quietSamples = 0
             movingSince = null
+            resetMotionEvidence()
             sensors.setStationary(false)
         }
         mutableState.value = state.value.copy(sections = next,
@@ -397,6 +400,7 @@ class TrackerBloc(
             movingSince = null
             compassOffset = 0.0
             pendingStill = false
+            resetMotionEvidence()
             mutableState.value = TrackerState(running = true, identity = value.identity, sections = state.value.sections)
         } else {
             mutableState.value = state.value.copy(running = true, identity = value.identity)
@@ -420,23 +424,29 @@ class TrackerBloc(
             mutableState.value = state.value.copy(estimate = rawEstimate(fix), flags = emptySet(), rejection = null)
             return
         }
-        if (state.value.activity == Activity.STILL) return reject("Stationary activity: GNSS paused")
         if (fix.source == LocationSource.network && now - lastPreciseTime <= 10.0) return reject("Network fix superseded by recent GNSS")
         if (fix.source != LocationSource.network && guard.suspect(now)) return reject("GNSS time disagrees with server")
         val controls = controls(now)
         val estimate = filter.fix(fix, controls.first, controls.second, state.value.activity == Activity.IN_VEHICLE)
             ?: return reject(filter.rejection ?: "Rejected fix")
         lastRaw = fix
-        if (fix.source != LocationSource.network) lastPreciseTime = fix.monotonicSeconds
+        if (fix.source != LocationSource.network) {
+            lastPreciseTime = fix.monotonicSeconds
+            notePreciseMotion(fix)
+        }
         mutableState.value = state.value.copy(acceptedFixes = state.value.acceptedFixes + 1, rejection = null)
         if (state.value.activity == Activity.WALKING && fix.speedMps > 0.7 && fix.bearingDegrees >= 0) {
             freshCompass(now)?.let { compassOffset = wrapRadians((fix.bearingDegrees - it) * RADIANS) / RADIANS }
         }
         if (stop.shouldRelease(fix)) stop = StopAnchor()
         if (!stop.active && quietMotion(now) && fix.speedMps in 0.0..<0.5 &&
-            fix.source != LocationSource.network && !pressureVeto(now)) {
+            fix.source != LocationSource.network && slowSpeedConfirmed() && !pressureVeto(now)) {
             filter.stationary()
             stop.begin(estimate)
+        }
+        if (state.value.activity == Activity.STILL && !stop.active) {
+            sensors.setStationary(false)
+            mutableState.value = state.value.copy(activity = Activity.UNKNOWN)
         }
         if (stop.active) {
             stop.driftMeters(fix)?.let { drift ->
@@ -468,7 +478,7 @@ class TrackerBloc(
         } else if (raw != null && now - raw.monotonicSeconds > 2.0 &&
             state.value.activity != Activity.WALKING && state.value.activity != Activity.STILL) {
             // Quiet IMU alone cannot distinguish a parked car from constant-speed driving.
-            if (quietMotion(now) && raw.speedMps in 0.0..<0.5 && !pressureVeto(now) &&
+            if (quietMotion(now) && raw.speedMps in 0.0..<0.5 && slowSpeedConfirmed() && !pressureVeto(now) &&
                 now - raw.monotonicSeconds <= config.predictionHorizonSeconds) {
                 val held = state.value.autonomousEstimate
                 if (held != null) {
@@ -578,7 +588,7 @@ class TrackerBloc(
             return
         }
         if (value == Activity.STILL && lastRaw?.let {
-                it.source != LocationSource.network && it.speedMps > 1.5 &&
+                it.source != LocationSource.network && it.speedMps > 1.0 &&
                     clock.monotonicSeconds() - it.monotonicSeconds <= 5.0
             } == true) {
             pendingStill = true
@@ -615,6 +625,23 @@ class TrackerBloc(
         motion?.takeIf { now - it.monotonicSeconds in 0.0..1.0 }?.let {
             (it.longitudinalAcceleration ?: 0.0) to (it.yawRateRadians?.minus(gyroBias) ?: 0.0)
         } ?: (0.0 to 0.0)
+
+    private fun resetMotionEvidence() {
+        sawPreciseMotion = false
+        consecutiveSlowPreciseFixes = 0
+    }
+
+    private fun notePreciseMotion(fix: LocationFix) {
+        if (fix.speedMps >= 0.5) {
+            sawPreciseMotion = true
+            consecutiveSlowPreciseFixes = 0
+        } else if (fix.speedMps >= 0.0) {
+            consecutiveSlowPreciseFixes++
+        }
+    }
+
+    /** A single slow Doppler sample after real motion is a dropout, not a stop. */
+    private fun slowSpeedConfirmed() = !sawPreciseMotion || consecutiveSlowPreciseFixes >= 2
 
     private fun quietMotion(now: Double): Boolean =
         quietSamples >= 10 && motion?.let { now - it.monotonicSeconds in 0.0..1.0 } == true

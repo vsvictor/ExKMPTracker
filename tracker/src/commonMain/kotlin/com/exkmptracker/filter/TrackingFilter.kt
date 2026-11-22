@@ -12,6 +12,9 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
     private var originLongitude = 0.0
     private var time = Double.NEGATIVE_INFINITY
     private var lastFix: LocationFix? = null
+    private var rejectedLatitude = Double.NaN
+    private var rejectedLongitude = Double.NaN
+    private var rejectedCluster = 0
     private data class Control(val time: Double, val acceleration: Double?, val yawRate: Double?)
     private val controls = mutableListOf<Control>()
     var rejection: String? = null
@@ -43,23 +46,15 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
                 ) return reject("Implausible position after signal gap")
             }
         }
-        val variance = fix.accuracyMeters.pow(2) / CHI_68
+        val variance = positionVariance(fix)
         if (previous == null || fix.monotonicSeconds - previous.monotonicSeconds > config.predictionHorizonSeconds) {
-            originLatitude = fix.latitude
-            originLongitude = fix.longitude
-            val hasDoppler = fix.source != LocationSource.network
-            x = doubleArrayOf(0.0, 0.0, if (hasDoppler) max(0.0, fix.speedMps) else 0.0,
-                if (!hasDoppler || fix.bearingDegrees < 0) 0.0 else wrapRadians(fix.bearingDegrees * RADIANS))
-            p = Array(4) { DoubleArray(4) }
-            p[0][0] = variance
-            p[1][1] = variance
-            p[2][2] = if (!hasDoppler || fix.speedMps < 0) 25.0 else speedVariance(fix)
-            p[3][3] = if (!hasDoppler || fix.bearingDegrees < 0) 1.0 else headingVariance(fix)
-            time = fix.monotonicSeconds
+            resetTo(fix, variance)
         } else {
             val savedX = x.copyOf()
             val savedP = Array(4) { p[it].copyOf() }
             val savedTime = time
+            val savedOriginLatitude = originLatitude
+            val savedOriginLongitude = originLongitude
             advance(fix.monotonicSeconds, acceleration, yawRate, constrainLateral)
             val east = wrapRadians((fix.longitude - originLongitude) * RADIANS) *
                 EARTH_RADIUS_METERS * cos(originLatitude * RADIANS)
@@ -71,16 +66,27 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
             val s01 = p[0][1]
             val determinant = s00 * s11 - s01 * s01
             val mahalanobis = (s11 * de * de - 2 * s01 * de * dn + s00 * dn * dn) / determinant
-            if (!mahalanobis.isFinite() || determinant <= 0 || mahalanobis > 13.8155) {
+            if (!mahalanobis.isFinite() || determinant <= 0 || mahalanobis > CHI_SQUARE_GATE) {
                 x = savedX
                 p = savedP
                 time = savedTime
+                originLatitude = savedOriginLatitude
+                originLongitude = savedOriginLongitude
+                // One spike stays rejected. Three precise fixes that agree with each other
+                // are a new position, not a lock on the previous bias.
+                if (fix.source != LocationSource.network && noteRejectedCluster(fix)) {
+                    resetTo(fix, variance)
+                    lastFix = fix
+                    rejection = null
+                    return estimate(fix.source)
+                }
                 return reject("Position innovation exceeds chi-square gate")
             }
+            clearRejectedCluster()
             update(0, east, variance)
             update(1, north, variance)
             if (fix.source != LocationSource.network && fix.speedMps >= 0) update(2, fix.speedMps, speedVariance(fix))
-            if (fix.source != LocationSource.network && fix.bearingDegrees >= 0 && x[2] > 2.0) {
+            if (fix.source != LocationSource.network && fix.bearingDegrees >= 0 && x[2] > MIN_COURSE_UPDATE_SPEED_MPS) {
                 update(3, fix.bearingDegrees * RADIANS, headingVariance(fix))
             }
         }
@@ -125,6 +131,9 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
         copy.originLongitude = originLongitude
         copy.time = time
         copy.lastFix = lastFix
+        copy.rejectedLatitude = rejectedLatitude
+        copy.rejectedLongitude = rejectedLongitude
+        copy.rejectedCluster = rejectedCluster
         copy.controls.addAll(controls)
     }
 
@@ -163,7 +172,7 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
         val s01 = p[0][1]
         val det = s00 * s11 - s01 * s01
         val mahalanobis = (s11 * de * de - 2 * s01 * de * dn + s00 * dn * dn) / det
-        if (det <= 0 || !mahalanobis.isFinite() || mahalanobis > 13.8155) {
+        if (det <= 0 || !mahalanobis.isFinite() || mahalanobis > CHI_SQUARE_GATE) {
             x = savedX
             p = savedP
             time = savedTime
@@ -210,7 +219,7 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
             f[1][3] = -v * s * dt
             x[0] += v * s * dt
             x[1] += v * c * dt
-            x[2] = max(0.0, v + a * dt).let { if (it < 0.3 && abs(a) < 0.3) 0.0 else it }
+            x[2] = max(0.0, v + a * dt)
             x[3] = wrapRadians(x[3] + w * dt)
             val fp = multiply(f, p)
             p = Array(4) { i -> DoubleArray(4) { j -> (0..3).sumOf { k -> fp[i][k] * f[j][k] } } }
@@ -246,6 +255,7 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
     }
 
     private fun estimate(source: LocationSource): TrackEstimate {
+        recenterTangentPlane()
         val eigen = (p[0][0] + p[1][1] +
             sqrt((p[0][0] - p[1][1]).pow(2) + 4 * p[0][1].pow(2))) / 2
         val latitude = originLatitude + x[1] / EARTH_RADIUS_METERS / RADIANS
@@ -268,6 +278,58 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
         else -> null
     }
 
+    private fun resetTo(fix: LocationFix, variance: Double) {
+        originLatitude = fix.latitude
+        originLongitude = fix.longitude
+        val hasDoppler = fix.source != LocationSource.network
+        x = doubleArrayOf(0.0, 0.0, if (hasDoppler) max(0.0, fix.speedMps) else 0.0,
+            if (!hasDoppler || fix.bearingDegrees < 0) 0.0 else wrapRadians(fix.bearingDegrees * RADIANS))
+        p = Array(4) { DoubleArray(4) }
+        p[0][0] = variance
+        p[1][1] = variance
+        p[2][2] = if (!hasDoppler || fix.speedMps < 0) 25.0 else speedVariance(fix)
+        p[3][3] = if (!hasDoppler || fix.bearingDegrees < 0) 1.0 else headingVariance(fix)
+        time = fix.monotonicSeconds
+        clearRejectedCluster()
+    }
+
+    /** Provider radii are optimistic. Network error is wider than the reported radius. */
+    private fun positionVariance(fix: LocationFix): Double {
+        val extra = if (fix.source == LocationSource.network) NETWORK_SIGMA_METERS else 0.0
+        val sigma = max(MIN_POSITION_SIGMA_METERS, hypot(fix.accuracyMeters, extra))
+        return sigma * sigma / CHI_68
+    }
+
+    private fun noteRejectedCluster(fix: LocationFix): Boolean {
+        val agrees = !rejectedLatitude.isNaN() &&
+            distanceMeters(rejectedLatitude, rejectedLongitude, fix.latitude, fix.longitude) <=
+                max(CLUSTER_RADIUS_METERS, 2.0 * fix.accuracyMeters)
+        rejectedCluster = if (agrees) rejectedCluster + 1 else 1
+        rejectedLatitude = fix.latitude
+        rejectedLongitude = fix.longitude
+        return rejectedCluster >= CLUSTER_COUNT
+    }
+
+    private fun clearRejectedCluster() {
+        rejectedCluster = 0
+        rejectedLatitude = Double.NaN
+        rejectedLongitude = Double.NaN
+    }
+
+    /** Keep the motion model in a local tangent plane. The conversion is invertible. */
+    private fun recenterTangentPlane() {
+        val east = x[0]
+        val north = x[1]
+        if (!east.isFinite() || !north.isFinite() || hypot(east, north) < TANGENT_RECENTER_METERS) return
+        val latitude = originLatitude + north / EARTH_RADIUS_METERS / RADIANS
+        val longitude = originLongitude + east /
+            (EARTH_RADIUS_METERS * cos(originLatitude * RADIANS).coerceAtLeast(1e-8)) / RADIANS
+        originLatitude = latitude.coerceIn(-90.0, 90.0)
+        originLongitude = wrapRadians(longitude * RADIANS) / RADIANS
+        x[0] = 0.0
+        x[1] = 0.0
+    }
+
     private fun speedVariance(f: LocationFix) =
         f.speedAccuracyMps?.takeIf { it.isFinite() && it >= 0 }?.let { max(it * it, 0.01) } ?: 4.0
 
@@ -282,6 +344,13 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
 
     companion object {
         private const val CHI_68 = 2.27886856637673
+        private const val CHI_SQUARE_GATE = 13.8155
         private const val MAX_SPEED = 220.0 / 3.6
+        private const val MIN_POSITION_SIGMA_METERS = 3.0
+        private const val NETWORK_SIGMA_METERS = 30.0
+        private const val MIN_COURSE_UPDATE_SPEED_MPS = 0.5
+        private const val CLUSTER_RADIUS_METERS = 40.0
+        private const val CLUSTER_COUNT = 3
+        private const val TANGENT_RECENTER_METERS = 2_000.0
     }
 }

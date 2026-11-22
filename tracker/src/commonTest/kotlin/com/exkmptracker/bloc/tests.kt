@@ -260,6 +260,49 @@ class TrackerBlocTests {
         assertEquals(1, f.queue.size(session.identity))
     }
 
+    @Test fun oneSlowSampleAfterDrivingDoesNotAnchor() = runTest {
+        val f = Fixture(backgroundScope)
+        f.bloc.dispatch(TrackerEvent.Start(session))
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.0, 30.0, 5.0, 1000, 1.0,
+            LocationSource.gps, 12.0, 0.0, speedAccuracyMps = 0.1)))
+        runCurrent()
+        val continued = 50.0 + 12.0 * 3.2 / 6_371_000.0 * 180.0 / kotlin.math.PI
+        f.clock.now = 4.2
+        repeat(10) { i ->
+            f.bloc.dispatch(TrackerEvent.Motion(MotionSample(3.3 + i / 10.0, 0.0, 0.0, 0.01)))
+        }
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(continued, 30.0, 5.0, 4200, 4.2,
+            LocationSource.gps, 0.0, 0.0, speedAccuracyMps = 0.1)))
+        runCurrent()
+        assertEquals(LocationSource.gps, f.bloc.state.value.estimate?.source)
+        f.clock.now = 6.0
+        repeat(10) { i ->
+            f.bloc.dispatch(TrackerEvent.Motion(MotionSample(5.1 + i / 10.0, 0.0, 0.0, 0.01)))
+        }
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(continued, 30.0, 5.0, 6000, 6.0,
+            LocationSource.gps, 0.1, 0.0, speedAccuracyMps = 0.1)))
+        runCurrent()
+        assertEquals(LocationSource.stationary, f.bloc.state.value.estimate?.source)
+    }
+
+    @Test fun stillFollowsAMovingFixInsteadOfDroppingIt() = runTest {
+        val f = Fixture(backgroundScope)
+        f.bloc.dispatch(TrackerEvent.Start(session))
+        repeat(10) { i ->
+            f.bloc.dispatch(TrackerEvent.Motion(MotionSample(i / 10.0, 0.0, 0.0, 0.01)))
+        }
+        f.fix()
+        f.bloc.dispatch(TrackerEvent.ActivityChanged(Activity.STILL))
+        runCurrent()
+        f.clock.now = 3.0
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00008, 30.0, 8.0, 3000, 3.0,
+            LocationSource.gps, 1.2, 0.0)))
+        runCurrent()
+        assertEquals(Activity.UNKNOWN, f.bloc.state.value.activity)
+        assertTrue(assertNotNull(f.bloc.state.value.estimate).latitude > 50.0)
+        assertEquals(LocationSource.gps, f.bloc.state.value.estimate?.source)
+    }
+
     @Test fun quietImuAtDrivingSpeedDoesNotForceZeroVelocity() = runTest {
         val f = Fixture(backgroundScope)
         f.bloc.dispatch(TrackerEvent.Start(session))

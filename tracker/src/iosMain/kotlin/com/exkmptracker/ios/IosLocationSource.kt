@@ -126,7 +126,8 @@ internal class IosLocationSource(
             return
         }
 
-        val fullAccuracy = iosMajorVersion() >= 14 &&
+        // iOS 14 introduced reduced-accuracy authorization. Earlier systems have no such switch.
+        val fullAccuracy = iosMajorVersion() < 14 ||
             manager.accuracyAuthorization == CLAccuracyAuthorization.CLAccuracyAuthorizationFullAccuracy
         val isPreciseNativeLocation = fullAccuracy && accuracy <= config.maxGnssAccuracyMeters
         val source = if (isPreciseNativeLocation) LocationSource.gps else LocationSource.fused

@@ -401,7 +401,7 @@ class AndroidSensorController(
     private companion object {
         const val MOTION_INTERVAL_NANOS = 20_000_000L
         const val MAX_SENSOR_AGE_NANOS = 1_000_000_000L
-        const val MAX_COURSE_AGE_NANOS = 15_000_000_000L
+        const val MAX_COURSE_AGE_NANOS = 3_000_000_000L
         const val MIN_COURSE_SPEED_MPS = 1.0
     }
 }

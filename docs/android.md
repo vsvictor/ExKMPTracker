@@ -100,12 +100,13 @@ This increases battery usage and does not override Android Doze or OEM power res
 
 ## Platform behavior and limits
 
-- The runtime dispatches the shared bloc's `Tick` event once per second. Location requests run at
-  a 1-second interval with high accuracy and zero batching delay. Fused location is supplemented
-  by active platform GPS, network and passive-provider updates when available. If fused location
-  fails (including on devices without working Google Play services), GPS is actively requested;
-  if no precise provider is available a `PlatformError` is reported instead of silently relying
-  on network-only fixes.
+- The runtime dispatches the shared bloc's `Tick` event once per second. While moving, location
+  requests run at a 1-second interval with high accuracy, zero batching delay, and wait until the
+  provider reports an accurate fix. Only one stream is active. Fused location is primary. Platform
+  GPS is requested only after the fused request fails, including on devices without working Google
+  Play services. Network is requested only when neither precise provider can start, and a
+  `PlatformError` says that network fixes are not a precise fallback. Passive provider updates are
+  not consumed.
   `LocationFix` preserves provider wall time and Android `elapsedRealtimeNanos`; late callbacks
   are not rewritten as fresh observations.
 - Active motion sensing requests approximately 50 Hz, including before a confirmed stop.
@@ -113,8 +114,9 @@ This increases battery usage and does not override Android Doze or OEM power res
   magnetic-field fallback) transforms acceleration into earth coordinates. Magnetic north is
   corrected with `GeomagneticField` declination, and longitudinal acceleration is projected as
   `east * sin(course) + north * cos(course)`. Both inputs come only from the bloc's accepted GPS
-  or fused estimate, never a raw callback. Dead reckoning can reuse that calibration for up to
-  15 seconds from the accepted estimate's monotonic timestamp; predictions never renew it.
+  or fused estimate, never a raw callback. Longitudinal acceleration reuses that course for up to
+  3 seconds from the accepted estimate's monotonic timestamp; a staler course is withheld so a
+  turn is not projected onto the old track. Predictions never renew it.
   No phone mounting axis is assumed. Yaw is the negative world-up
   component of Android's right-handed gyroscope vector, matching the core's clockwise-from-north
   convention. Fresh gravity-compensated acceleration magnitude and available barometer readings
@@ -122,7 +124,8 @@ This increases battery usage and does not override Android Doze or OEM power res
   independently `null` when their inputs are unavailable. This lets the core detect quiet motion
   even before the first moving fix. `STILL` wake samples carry magnitude with both controls `null`.
   Missing hardware is reported through `PlatformError` and the injected logger.
-- In `STILL`, precise sensors, location and raw GNSS callbacks pause. A low-rate accelerometer and
+- In `STILL`, precise sensors and raw GNSS callbacks pause. Location continues as a 5-second
+  high-accuracy watchdog so a real departure can release the stop anchor. A low-rate accelerometer and
   a hardware significant-motion trigger are retained where available; three acceleration samples
   over 0.8 m/s² wake precise motion sensing. Wake detection subtracts the last trusted gravity
   vector and adjusts that baseline only below 0.2 m/s². Hardware support and sample cadence vary by device.

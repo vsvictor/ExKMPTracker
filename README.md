@@ -1,6 +1,8 @@
-# ExKMPTracker 1.0.0
+# ExKMPTracker 1.1.0
 
 [Українська](README.uk.md)
+
+Changes since 1.0.0 are listed in the [changelog](docs/changelog.md).
 
 Standalone Kotlin Multiplatform **vehicle tracking library** for Android and
 iOS. Android runs location tracking in a native location Foreground Service;
@@ -69,7 +71,7 @@ To consume from another Gradle project, add this composite build to its
 includeBuild("/Users/victor/ExKMPTracker")
 ```
 
-Then add `implementation("com.exkmptracker:tracker:1.0.0")` in the appropriate
+Then add `implementation("com.exkmptracker:tracker:1.1.0")` in the appropriate
 KMP source set or Android module. Match the Kotlin/AGP toolchain in this build.
 For Swift, build and link the XCFramework described in the iOS guide.
 

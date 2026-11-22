@@ -188,7 +188,7 @@ Storage errors are explicit, not converted into an empty queue.
 
 The previous HTTPS helpers are now optional compatibility code in
 `:tracker-http`. A host using those classes must add
-`implementation("com.exkmptracker:tracker-http:1.0.0")`; Swift hosts build
+`implementation("com.exkmptracker:tracker-http:1.1.0")`; Swift hosts build
 `:tracker-http:assembleExKMPTrackerHttpReleaseXCFramework` and link that
 framework **instead of** the core framework, not alongside it. They are not the
 transport for this CoopNav backend, whose AuthPlugin expects credentials in

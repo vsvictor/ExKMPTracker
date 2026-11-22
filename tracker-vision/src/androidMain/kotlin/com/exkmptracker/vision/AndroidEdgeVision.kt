@@ -4,6 +4,9 @@ import android.os.SystemClock
 import com.exkmptracker.cooperative.EdgeVisionController
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.gpu.CompatibilityList
+import org.tensorflow.lite.gpu.GpuDelegate
+import org.tensorflow.lite.nnapi.NnApiDelegate
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -14,37 +17,125 @@ data class AndroidVisionOptions(
     val release: () -> Unit = {},
 )
 
+/**
+ * Default accelerator selection. Call it on the inference thread: the GPU delegate must be
+ * created where it later runs. A host-supplied [androidEdgeVision] factory replaces this.
+ */
+fun acceleratedAndroidVisionOptions(): AndroidVisionOptions =
+    gpuAndroidVisionOptions() ?: nnapiAndroidVisionOptions() ?: cpuAndroidVisionOptions()
+
+/** Four XNNPACK threads. Used when no accelerator delegate can be created. */
+fun cpuAndroidVisionOptions(): AndroidVisionOptions =
+    AndroidVisionOptions(Interpreter.Options().setNumThreads(4).setUseXNNPACK(true))
+
 fun androidEdgeVision(
     modelFile: File?,
     source: VisionFrameSource?,
     calibration: CameraCalibration?,
     config: YoloConfig,
     timing: VisionTiming = VisionTiming(),
-    optionsFactory: () -> AndroidVisionOptions = {
-        AndroidVisionOptions(Interpreter.Options().setNumThreads(4))
-    },
+): EdgeVisionController = openEdgeVision(
+    modelFile, source, calibration, config, timing,
+    ::acceleratedAndroidVisionOptions,
+    allowAcceleratorFallback = true,
+)
+
+fun androidEdgeVision(
+    modelFile: File?,
+    source: VisionFrameSource?,
+    calibration: CameraCalibration?,
+    config: YoloConfig,
+    timing: VisionTiming = VisionTiming(),
+    optionsFactory: () -> AndroidVisionOptions,
+): EdgeVisionController = openEdgeVision(
+    modelFile, source, calibration, config, timing, optionsFactory,
+    allowAcceleratorFallback = false,
+)
+
+private fun openEdgeVision(
+    modelFile: File?,
+    source: VisionFrameSource?,
+    calibration: CameraCalibration?,
+    config: YoloConfig,
+    timing: VisionTiming,
+    optionsFactory: () -> AndroidVisionOptions,
+    allowAcceleratorFallback: Boolean,
 ): EdgeVisionController = NativeEdgeVision(
     source, calibration, config, timing,
     { SystemClock.elapsedRealtimeNanos() / 1e9 },
     modelFile?.let { file ->
         {
             require(file.isFile && file.canRead() && file.length() > 0) { "host TFLite model is missing or unreadable" }
-            val settings = optionsFactory()
-            val interpreter = try {
-                Interpreter(file, settings.options)
-            } catch (failure: Throwable) {
-                settings.release()
-                throw failure
-            }
-            try {
-                AndroidYoloBackend(interpreter, settings.release)
-            } catch (failure: Throwable) {
-                try { interpreter.close() } finally { settings.release() }
-                throw failure
-            }
+            if (allowAcceleratorFallback) openBackendOrCpu(file, optionsFactory)
+            else openBackend(file, optionsFactory)
         }
     },
 )
+
+private fun openBackendOrCpu(file: File, optionsFactory: () -> AndroidVisionOptions): YoloBackend =
+    try {
+        openBackend(file, optionsFactory)
+    } catch (acceleratorFailure: Throwable) {
+        try {
+            openBackend(file, ::cpuAndroidVisionOptions)
+        } catch (cpuFailure: Throwable) {
+            cpuFailure.addSuppressed(acceleratorFailure)
+            throw cpuFailure
+        }
+    }
+
+private fun openBackend(file: File, optionsFactory: () -> AndroidVisionOptions): YoloBackend {
+    val settings = optionsFactory()
+    val interpreter = try {
+        Interpreter(file, settings.options)
+    } catch (failure: Throwable) {
+        settings.release()
+        throw failure
+    }
+    return try {
+        AndroidYoloBackend(interpreter, settings.release)
+    } catch (failure: Throwable) {
+        try { interpreter.close() } finally { settings.release() }
+        throw failure
+    }
+}
+
+private fun gpuAndroidVisionOptions(): AndroidVisionOptions? {
+    val compat = try {
+        CompatibilityList()
+    } catch (failure: Throwable) {
+        return null
+    }
+    try {
+        if (!compat.isDelegateSupportedOnThisDevice) return null
+        val delegate = try {
+            GpuDelegate(compat.bestOptionsForThisDevice)
+        } catch (failure: Throwable) {
+            return null
+        }
+        // Unsupported ops stay on the four CPU threads. The delegate is closed after the interpreter.
+        return AndroidVisionOptions(Interpreter.Options().setNumThreads(4).addDelegate(delegate)) {
+            delegate.close()
+        }
+    } finally {
+        compat.close()
+    }
+}
+
+private fun nnapiAndroidVisionOptions(): AndroidVisionOptions? =
+    try {
+        val delegate = NnApiDelegate(
+            NnApiDelegate.Options()
+                .setAllowFp16(true)
+                .setUseNnapiCpu(false)
+                .setExecutionPreference(NnApiDelegate.Options.EXECUTION_PREFERENCE_SUSTAINED_SPEED),
+        )
+        AndroidVisionOptions(Interpreter.Options().setNumThreads(4).addDelegate(delegate)) {
+            delegate.close()
+        }
+    } catch (failure: Throwable) {
+        null
+    }
 
 private class AndroidYoloBackend(private val interpreter: Interpreter, private val release: () -> Unit) : YoloBackend {
     override val width: Int

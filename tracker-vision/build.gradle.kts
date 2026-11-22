@@ -34,6 +34,8 @@ kotlin {
         }
         androidMain.dependencies {
             api("com.google.ai.edge.litert:litert:1.4.1")
+            api("com.google.ai.edge.litert:litert-gpu:1.4.1")
+            api("com.google.ai.edge.litert:litert-gpu-api:1.4.1")
         }
         commonTest.dependencies {
             implementation(kotlin("test"))

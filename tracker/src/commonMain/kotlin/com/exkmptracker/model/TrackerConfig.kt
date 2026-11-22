@@ -2,8 +2,8 @@ package com.exkmptracker.model
 
 data class TrackerConfig @Throws(IllegalArgumentException::class) constructor(
     val antiFake: Boolean = true,
-    val maxGnssAccuracyMeters: Double = 20.0,
-    val maxNetworkAccuracyMeters: Double = 50.0,
+    val maxGnssAccuracyMeters: Double = 65.0,
+    val maxNetworkAccuracyMeters: Double = 150.0,
     val maxEstimateAccuracyMeters: Double = 100.0,
     val predictionHorizonSeconds: Double = 15.0,
     val recordDistanceMeters: Double = 25.0,

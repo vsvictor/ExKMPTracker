@@ -21,7 +21,12 @@ import com.google.android.gms.location.Priority
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Fused high-accuracy stream plus platform GPS, network, and passive-provider fallbacks. */
+/**
+ * One precise location stream. Fused high-accuracy is the primary source.
+ * Platform GPS is requested only after fused location fails, and network only when
+ * neither precise provider can be started. Passive updates are not used: they repeat
+ * another app's fix and were previously labelled as an independent fused measurement.
+ */
 class AndroidLocationSource(
     context: Context,
     private val dispatch: (TrackerEvent) -> Unit,
@@ -36,6 +41,7 @@ class AndroidLocationSource(
     private val handler = Handler(thread.looper)
     private val closed = AtomicBoolean(false)
     private var stationary = true
+    private var requestGeneration = 0
     private var fusedRequested = false
     private val platformListeners = mutableMapOf<String, LocationListener>()
     private val fusedCallback = object : LocationCallback() {
@@ -48,72 +54,103 @@ class AndroidLocationSource(
     fun setStationary(value: Boolean) {
         if (closed.get() || stationary == value) return
         stationary = value
-        if (value) stopUpdates() else startUpdates()
+        stopUpdates()
+        startUpdates()
     }
 
     @SuppressLint("MissingPermission")
     @Synchronized
     private fun startUpdates() {
-        if (closed.get() || stationary) return
+        if (closed.get()) return
         val fine = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
         val coarse = hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
         if (!fine && !coarse) {
             report("Location updates unavailable: grant fine or coarse location permission", null)
             return
         }
-        requestPlatformProvider(LocationManager.GPS_PROVIDER, fine, LocationSource.gps)
-        requestPlatformProvider(LocationManager.NETWORK_PROVIDER, fine || coarse, LocationSource.network)
-        requestPlatformProvider(LocationManager.PASSIVE_PROVIDER, fine || coarse, LocationSource.fused)
-        if (!fusedRequested) {
-            try {
-                val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, UPDATE_INTERVAL_MS)
-                    .setMinUpdateIntervalMillis(UPDATE_INTERVAL_MS)
-                    .setMaxUpdateDelayMillis(0)
-                    .setMaxUpdateAgeMillis(0)
-                    .setWaitForAccurateLocation(false)
-                    .build()
-                val task = fused.requestLocationUpdates(request, fusedCallback, thread.looper)
-                fusedRequested = true
-                task.addOnSuccessListener { }
-                    .addOnFailureListener {
+        val generation = ++requestGeneration
+        val interval = if (stationary) WATCH_INTERVAL_MS else UPDATE_INTERVAL_MS
+        if (fine && requestFused(interval, generation)) return
+        if (requestPlatformProvider(LocationManager.GPS_PROVIDER, fine, LocationSource.gps, interval)) return
+        report("No active precise location provider is available; network fixes alone are not a precise fallback", null)
+        requestPlatformProvider(LocationManager.NETWORK_PROVIDER, fine || coarse, LocationSource.network, interval)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestFused(intervalMs: Long, generation: Int): Boolean {
+        return try {
+            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
+                .setMinUpdateIntervalMillis(intervalMs)
+                .setMaxUpdateDelayMillis(0)
+                .setMaxUpdateAgeMillis(0)
+                .setWaitForAccurateLocation(true)
+                .build()
+            val task = fused.requestLocationUpdates(request, fusedCallback, thread.looper)
+            fusedRequested = true
+            task.addOnFailureListener {
+                handler.post {
+                    synchronized(this) {
+                        if (closed.get() || generation != requestGeneration) return@synchronized
                         fusedRequested = false
                         report("Fused location request failed; direct GPS_PROVIDER updates are requested as fallback", it)
-                        if (!platformListeners.containsKey(LocationManager.GPS_PROVIDER)) {
+                        val interval = if (stationary) WATCH_INTERVAL_MS else UPDATE_INTERVAL_MS
+                        val fine = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                        if (!requestPlatformProvider(LocationManager.GPS_PROVIDER, fine, LocationSource.gps, interval)) {
                             report("No active precise location provider is available; network fixes alone are not a precise fallback", it)
+                            requestPlatformProvider(
+                                LocationManager.NETWORK_PROVIDER,
+                                fine || hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION),
+                                LocationSource.network,
+                                interval,
+                            )
                         }
                     }
-            } catch (error: Exception) {
-                report("Unable to request fused location updates", error)
+                }
             }
+            true
+        } catch (error: Exception) {
+            fusedRequested = false
+            report("Unable to request fused location updates", error)
+            false
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun requestPlatformProvider(provider: String, allowed: Boolean, source: LocationSource) {
-        if (!allowed || platformListeners.containsKey(provider)) return
-        try {
+    private fun requestPlatformProvider(
+        provider: String,
+        allowed: Boolean,
+        source: LocationSource,
+        intervalMs: Long,
+    ): Boolean {
+        if (!allowed || platformListeners.containsKey(provider)) return platformListeners.containsKey(provider)
+        return try {
             if (!locationManager.isProviderEnabled(provider)) {
-                if (provider == LocationManager.GPS_PROVIDER) {
-                    report("GPS_PROVIDER is disabled; fused high-accuracy location may still be available", null)
+                if (provider == LocationManager.GPS_PROVIDER && !fusedRequested) {
+                    report("GPS_PROVIDER is disabled", null)
                 }
-                return
+                false
+            } else {
+                val listener = object : LocationListener {
+                    override fun onLocationChanged(location: Location) = emit(location, source)
+                    @Deprecated("Deprecated in Android")
+                    override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) = Unit
+                }
+                locationManager.requestLocationUpdates(provider, intervalMs, 0f, listener, thread.looper)
+                platformListeners[provider] = listener
+                true
             }
-            val listener = object : LocationListener {
-                override fun onLocationChanged(location: Location) = emit(location, source)
-                @Deprecated("Deprecated in Android")
-                override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) = Unit
-            }
-            locationManager.requestLocationUpdates(provider, UPDATE_INTERVAL_MS, 0f, listener, thread.looper)
-            platformListeners[provider] = listener
         } catch (error: SecurityException) {
             report("Permission denied for $provider location provider", error)
+            false
         } catch (error: Exception) {
             report("Unable to request $provider location updates", error)
+            false
         }
     }
 
     @Synchronized
     private fun stopUpdates() {
+        requestGeneration++
         if (fusedRequested) {
             fused.removeLocationUpdates(fusedCallback)
                 .addOnFailureListener { report("Unable to stop fused location updates", it) }
@@ -158,5 +195,8 @@ class AndroidLocationSource(
         thread.quitSafely()
     }
 
-    private companion object { const val UPDATE_INTERVAL_MS = 1_000L }
+    private companion object {
+        const val UPDATE_INTERVAL_MS = 1_000L
+        const val WATCH_INTERVAL_MS = 5_000L
+    }
 }
