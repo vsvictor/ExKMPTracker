@@ -54,6 +54,33 @@ class TrackingFilterTests {
         assertEquals(50.01, recovered.latitude, 1e-9)
     }
 
+    @Test fun coarseClusterCannotReplaceAPreciseLock() {
+        val filter = TrackingFilter()
+        val locked = assertNotNull(filter.fix(fix(accuracy = 5.0)))
+        repeat(3) { index ->
+            assertNull(filter.fix(fix(time = 2.0 + index, lat = 50.01, accuracy = 59.0)))
+        }
+        val kept = assertNotNull(filter.fix(fix(time = 6.0, accuracy = 5.0)))
+        assertEquals(locked.latitude, kept.latitude, 1e-6)
+        assertTrue(kept.accuracyMeters >= 3.0)
+    }
+
+    @Test fun coarseFixCannotReinitializeWithinAMinuteOfAPreciseFix() {
+        val filter = TrackingFilter()
+        filter.fix(fix(accuracy = 5.0))
+        assertNull(filter.fix(fix(time = 20.0, lat = 50.0002, accuracy = 59.0)))
+        val later = assertNotNull(filter.fix(fix(time = 70.0, lat = 50.0002, accuracy = 59.0)))
+        assertEquals(50.0002, later.latitude, 1e-9)
+        assertEquals(59.0, later.accuracyMeters, 1e-6)
+    }
+
+    @Test fun repeatedFixesDoNotReportAccuracyBelowThreeMeters() {
+        val filter = TrackingFilter()
+        var last = assertNotNull(filter.fix(fix(accuracy = 4.0)))
+        repeat(8) { index -> last = assertNotNull(filter.fix(fix(time = 2.0 + index, accuracy = 4.0))) }
+        assertTrue(last.accuracyMeters >= 3.0)
+    }
+
     @Test fun invalidInputsAreRejected() {
         for (invalid in listOf(
             fix(lat = Double.NaN), fix(lon = 181.0), fix(accuracy = 0.0), fix(speed = -0.5),
@@ -285,6 +312,15 @@ class StopAnchorTests {
         val stop = StopAnchor()
         stop.begin(estimate())
         assertEquals(23.0, assertNotNull(stop.estimate(10_000.0)).accuracyMeters, 1e-6)
+    }
+
+    @Test fun freshPreciseFixesDoNotInflateTheHeldAccuracy() {
+        val stop = StopAnchor()
+        stop.begin(estimate())
+        val early = assertNotNull(stop.estimate(31.0, corroboratedAt = 30.0))
+        val later = assertNotNull(stop.estimate(61.0, corroboratedAt = 60.0))
+        assertEquals(early.accuracyMeters, later.accuracyMeters, 1e-8)
+        assertTrue(later.accuracyMeters < assertNotNull(stop.estimate(61.0)).accuracyMeters)
     }
 
     @Test fun networkAnchorIsReplacedByFirstPreciseFix() {

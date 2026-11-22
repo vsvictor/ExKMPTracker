@@ -2,7 +2,7 @@
 
 [Українською](tracking.uk.md) | **English**
 
-This document describes the ExKMPTracker 1.1.0 positioning pipeline: sources,
+This document describes the ExKMPTracker 1.1.1 positioning pipeline: sources,
 estimation, predictions, and the path of a point from a native event to server
 acknowledgement. It is a Kotlin Multiplatform implementation, not a Flutter wrapper.
 The short contract is in [algorithm.md](algorithm.md).

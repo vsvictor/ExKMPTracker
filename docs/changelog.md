@@ -2,6 +2,23 @@
 
 [Українською](changelog.uk.md) | **English**
 
+## 1.1.1
+
+The map circle is the filter radius, not the latest `CLLocation.horizontalAccuracy`.
+On iOS a 50–65 m sample is still labelled `gps` because there is no network source
+and the acceptance gate is 65 m. In 1.1.0 three such samples, or one of them after
+a 15-second gap, could reinitialize a tight estimate, so a circle could jump from
+about 3 m to about 59 m. A separate `CLLocationManager` is a different sample and
+is not expected to match.
+
+1.1.1 keeps a fix of ≤ 25 m as the precise lock. A coarser fix is ignored for 10
+seconds after it and cannot reinitialize the filter for 60 seconds. Chi-square
+reinitialization requires that same precise accuracy. Reported radius does not go
+below 3 m. While precise fixes continue, the stationary circle does not grow; the
+0.1 m/s growth, capped at 15 m, starts only after the last precise fix. The held
+position can still receive a new timestamp so the pin does not expire. That
+timestamp is not a new measurement.
+
 ## 1.1.0
 
 Compared with library **1.0.0** and with the Flutter TMSDriver specification that

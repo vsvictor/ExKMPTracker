@@ -5,6 +5,13 @@ import com.exkmptracker.cooperative.MatchedDonor
 import com.exkmptracker.cooperative.VisualObservation
 import kotlin.math.*
 
+/** iOS has no network source, so a 59 m Core Location fix is otherwise treated as GPS. */
+internal fun LocationFix.isPreciseFix(): Boolean =
+    source != LocationSource.network && accuracyMeters.isFinite() &&
+        accuracyMeters <= PRECISE_FIX_ACCURACY_METERS
+
+private const val PRECISE_FIX_ACCURACY_METERS = 25.0
+
 class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
     private var x = DoubleArray(4)
     private var p = Array(4) { DoubleArray(4) }
@@ -47,7 +54,13 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
             }
         }
         val variance = positionVariance(fix)
-        if (previous == null || fix.monotonicSeconds - previous.monotonicSeconds > config.predictionHorizonSeconds) {
+        val gap = if (previous == null) Double.POSITIVE_INFINITY else fix.monotonicSeconds - previous.monotonicSeconds
+        if (previous == null || gap > config.predictionHorizonSeconds) {
+            // A 50–65 m Core Location sample is still labelled gps on iOS. It must not
+            // wipe a recent precise lock just because the previous fix aged out.
+            if (previous != null && !fix.isPreciseFix() && previous.isPreciseFix() && gap <= COARSE_REINIT_SECONDS) {
+                return reject("Coarse fix cannot replace a recent precise position")
+            }
             resetTo(fix, variance)
         } else {
             val savedX = x.copyOf()
@@ -74,7 +87,7 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
                 originLongitude = savedOriginLongitude
                 // One spike stays rejected. Three precise fixes that agree with each other
                 // are a new position, not a lock on the previous bias.
-                if (fix.source != LocationSource.network && noteRejectedCluster(fix)) {
+                if (fix.isPreciseFix() && noteRejectedCluster(fix)) {
                     resetTo(fix, variance)
                     lastFix = fix
                     rejection = null
@@ -261,8 +274,9 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
         val latitude = originLatitude + x[1] / EARTH_RADIUS_METERS / RADIANS
         val longitude = originLongitude + x[0] /
             (EARTH_RADIUS_METERS * cos(originLatitude * RADIANS).coerceAtLeast(1e-8)) / RADIANS
+        val radius = sqrt(max(0.0, CHI_68 * eigen)).coerceAtLeast(MIN_POSITION_SIGMA_METERS)
         return TrackEstimate(latitude.coerceIn(-90.0, 90.0),
-            wrapRadians(longitude * RADIANS) / RADIANS, sqrt(max(0.0, CHI_68 * eigen)),
+            wrapRadians(longitude * RADIANS) / RADIANS, radius,
             x[2], bearingDegrees(x[3]), time, source)
     }
 
@@ -347,6 +361,7 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
         private const val CHI_SQUARE_GATE = 13.8155
         private const val MAX_SPEED = 220.0 / 3.6
         private const val MIN_POSITION_SIGMA_METERS = 3.0
+        private const val COARSE_REINIT_SECONDS = 60.0
         private const val NETWORK_SIGMA_METERS = 30.0
         private const val MIN_COURSE_UPDATE_SPEED_MPS = 0.5
         private const val CLUSTER_RADIUS_METERS = 40.0

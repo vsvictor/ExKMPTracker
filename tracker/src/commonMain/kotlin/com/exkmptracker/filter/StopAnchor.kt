@@ -60,9 +60,14 @@ internal class StopAnchor {
         }
     }
 
-    fun estimate(now: Double): TrackEstimate? =
+    /**
+     * Uncertainty grows only while precise fixes are absent.
+     * [corroboratedAt] is the time of the last precise fix; null means the anchor start.
+     */
+    fun estimate(now: Double, corroboratedAt: Double? = null): TrackEstimate? =
         anchor?.let {
-            val growth = min(ACCURACY_GROWTH_CAP_METERS, max(0.0, now - began) * 0.1)
+            val since = corroboratedAt?.takeIf { time -> time.isFinite() }?.let { time -> max(began, time) } ?: began
+            val growth = min(ACCURACY_GROWTH_CAP_METERS, max(0.0, now - since) * 0.1)
             it.copy(monotonicSeconds = now, accuracyMeters = it.accuracyMeters + growth)
         }
 

@@ -424,13 +424,16 @@ class TrackerBloc(
             mutableState.value = state.value.copy(estimate = rawEstimate(fix), flags = emptySet(), rejection = null)
             return
         }
-        if (fix.source == LocationSource.network && now - lastPreciseTime <= 10.0) return reject("Network fix superseded by recent GNSS")
+        if (!fix.isPreciseFix() && now - lastPreciseTime <= 10.0) {
+            return reject(if (fix.source == LocationSource.network) "Network fix superseded by recent GNSS"
+                else "Coarse fix superseded by recent precise fix")
+        }
         if (fix.source != LocationSource.network && guard.suspect(now)) return reject("GNSS time disagrees with server")
         val controls = controls(now)
         val estimate = filter.fix(fix, controls.first, controls.second, state.value.activity == Activity.IN_VEHICLE)
             ?: return reject(filter.rejection ?: "Rejected fix")
         lastRaw = fix
-        if (fix.source != LocationSource.network) {
+        if (fix.isPreciseFix()) {
             lastPreciseTime = fix.monotonicSeconds
             notePreciseMotion(fix)
         }
@@ -458,7 +461,7 @@ class TrackerBloc(
                     stationaryDriftMaxMeters = max(old.stationaryDriftMaxMeters, drift))
             }
             stop.add(fix)
-            record(stop.estimate(now) ?: estimate, null)
+            record(heldEstimate(now) ?: estimate, null)
         } else {
             record(estimate, fix)
         }
@@ -474,7 +477,7 @@ class TrackerBloc(
         expireCooperative(now)
         val raw = lastRaw
         if (stop.active) {
-            stop.estimate(now)?.let { record(it, null) }
+            heldEstimate(now)?.let { record(it, null) }
         } else if (raw != null && now - raw.monotonicSeconds > 2.0 &&
             state.value.activity != Activity.WALKING && state.value.activity != Activity.STILL) {
             // Quiet IMU alone cannot distinguish a parked car from constant-speed driving.
@@ -484,7 +487,7 @@ class TrackerBloc(
                 if (held != null) {
                     filter.stationary()
                     stop.begin(held.copy(monotonicSeconds = now), raw.source == LocationSource.network)
-                    stop.estimate(now)?.let { record(it, null) }
+                    heldEstimate(now)?.let { record(it, null) }
                 } else {
                     filter.stationary()
                     predict(now)
@@ -503,6 +506,9 @@ class TrackerBloc(
         val source = state.value.estimate?.source
         mutableState.value = state.value.copy(flags = flags(now, source))
     }
+
+    private fun heldEstimate(now: Double) =
+        stop.estimate(now, lastPreciseTime.takeIf { it.isFinite() && it > 0.0 })
 
     private suspend fun predict(now: Double) {
         val controls = controls(now)

@@ -28,14 +28,18 @@ The four-state EKF uses east/north metres, speed and clockwise heading:
   adds 30 m in quadrature so a cell/Wi-Fi radius cannot collapse the covariance.
 - Fix age in monotonic time: `-2 < age ≤ 10` seconds. Native providers preserve
   observation age; arrival time is never substituted for observation time.
-- Network fallback is suppressed for 10 seconds after an accepted precise fix.
+- A precise fix has accuracy ≤ 25 m and is not network. Network and coarser fixes
+  are suppressed for 10 seconds after one. A coarse fix cannot reinitialize the
+  filter for 60 seconds after a precise fix, so an iOS sample of about 50–65 m
+  cannot replace a tight lock. The reported radius is never below 3 m.
   Android feeds one precise stream: fused location, or platform GPS only after
   fused location fails, or network only when neither precise provider starts.
 - Android 68% horizontal radius converts to per-axis variance using
   `2.27886856637673`; reported uncertainty uses the largest covariance eigenvalue.
 - Position innovations must pass the 2D 99.9% chi-square gate (`13.8155`).
   A single failure leaves the state unchanged. Three consecutive precise fixes
-  that agree with each other reinitialize the filter, so a biased lock can be left.
+  (accuracy ≤ 25 m) that agree with each other reinitialize the filter, so a biased
+  lock can be left. A coarse cluster cannot.
 - Speed/course accuracy uses provider values with conservative fallbacks.
   Course updates require speed > 0.5 m/s. Speed below 0.3 m/s is integrated;
   it is not forced to zero.
@@ -80,7 +84,9 @@ during those five seconds.
 The anchor can be replaced once from network to GNSS and refined once after
 ≥ 10 precise fixes using inverse-variance weights, a 2× improvement requirement
 and a best-single-fix/4 accuracy floor. Stationary uncertainty grows 0.1 m/s
-and the added growth is capped at 15 m. On Android, activity-based STILL pauses
+only after the last precise fix, and the added growth is capped at 15 m. A fresh
+precise fix does not inflate the held circle. The published time still advances
+so the map pin does not expire, but that time is not a new measurement. On Android, activity-based STILL pauses
 precise sensors and raw GNSS, and slows location to a 5-second precise watchdog
 instead of stopping it. iOS retains continuous Core Location: motion callbacks
 alone cannot reliably wake a suspended app. Fixes received during STILL still
