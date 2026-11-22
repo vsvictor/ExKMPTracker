@@ -107,10 +107,12 @@ class TrackerBlocTests {
         f.fix()
         runCurrent()
         f.clock.now = 121.0
-        f.fix()
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.002, 30.0, 5.0, 121_000, 121.0,
+            LocationSource.gps, 8.0, 0.0)))
         runCurrent()
         f.clock.now = 241.0
-        f.fix()
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.004, 30.0, 5.0, 241_000, 241.0,
+            LocationSource.gps, 8.0, 0.0)))
         runCurrent()
         val original = f.queue.peek(session.identity, 100)
         f.transport.accepted = { listOf(it[0].id, it[2].id) }
@@ -295,12 +297,67 @@ class TrackerBlocTests {
         f.bloc.dispatch(TrackerEvent.ActivityChanged(Activity.STILL))
         runCurrent()
         f.clock.now = 3.0
-        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00008, 30.0, 8.0, 3000, 3.0,
-            LocationSource.gps, 1.2, 0.0)))
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00011, 30.0, 8.0, 3000, 3.0,
+            LocationSource.gps, 2.0, 0.0)))
+        runCurrent()
+        f.clock.now = 4.0
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00022, 30.0, 8.0, 4000, 4.0,
+            LocationSource.gps, 2.0, 0.0)))
+        runCurrent()
+        assertEquals(Activity.STILL, f.bloc.state.value.activity)
+        assertEquals(LocationSource.stationary, f.bloc.state.value.estimate?.source)
+        f.clock.now = 5.0
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00033, 30.0, 8.0, 5000, 5.0,
+            LocationSource.gps, 2.0, 0.0)))
         runCurrent()
         assertEquals(Activity.UNKNOWN, f.bloc.state.value.activity)
-        assertTrue(assertNotNull(f.bloc.state.value.estimate).latitude > 50.0)
+        // Posterior lags the raw 12 m steps. 0.00015° is about 17 m clear of the anchor.
+        assertTrue(assertNotNull(f.bloc.state.value.estimate).latitude > 50.00015)
         assertEquals(LocationSource.gps, f.bloc.state.value.estimate?.source)
+    }
+
+    @Test fun parkedDopplerNoiseDoesNotExtendTheTrack() = runTest {
+        val f = Fixture(backgroundScope)
+        f.bloc.dispatch(TrackerEvent.Start(session))
+        for (second in 0..16) {
+            f.clock.now = 1.0 + second
+            val lat = 50.0 + (if (second % 2 == 0) 3.0 else -3.0) / 111_320.0
+            f.bloc.dispatch(TrackerEvent.Position(LocationFix(lat, 30.0, 5.0,
+                (f.clock.now * 1000).toLong(), f.clock.now, LocationSource.gps, 1.6, (second * 40 % 360).toDouble())))
+            runCurrent()
+        }
+        val parkedEstimate = assertNotNull(f.bloc.state.value.estimate)
+        assertEquals(LocationSource.stationary, parkedEstimate.source)
+        val parked = f.queue.points.getValue(session.identity)
+        assertTrue(parked.all { kotlin.math.abs(it.smoothedLatitude - 50.0) < 25.0 / 111_320.0 })
+        f.clock.now = 18.0
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00003, 30.0, 5.0, 18_000, 18.0,
+            LocationSource.gps, 1.6, 40.0)))
+        runCurrent()
+        assertEquals(parkedEstimate.latitude, assertNotNull(f.bloc.state.value.estimate).latitude, 1e-9)
+        assertEquals(parkedEstimate.longitude, assertNotNull(f.bloc.state.value.estimate).longitude, 1e-9)
+        val before = f.queue.size(session.identity)
+        f.clock.now = 20.0
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.0, 30.0, 5.0, 20_000, 20.0,
+            LocationSource.gps, 2.5, 90.0)))
+        runCurrent()
+        assertEquals(LocationSource.stationary, f.bloc.state.value.estimate?.source)
+        assertEquals(before, f.queue.size(session.identity))
+    }
+
+    @Test fun straightCreepKeepsTheFilterPosition() = runTest {
+        val f = Fixture(backgroundScope)
+        f.bloc.dispatch(TrackerEvent.Start(session))
+        for (second in 0..12) {
+            f.clock.now = 1.0 + second
+            val lat = 50.0 + second * 1.5 / 111_320.0
+            f.bloc.dispatch(TrackerEvent.Position(LocationFix(lat, 30.0, 5.0,
+                (f.clock.now * 1000).toLong(), f.clock.now, LocationSource.gps, 1.5, 0.0)))
+            runCurrent()
+        }
+        val estimated = assertNotNull(f.bloc.state.value.estimate)
+        assertEquals(LocationSource.gps, estimated.source)
+        assertTrue(estimated.latitude > 50.0 + 8.0 / 111_320.0)
     }
 
     @Test fun quietImuAtDrivingSpeedDoesNotForceZeroVelocity() = runTest {

@@ -193,7 +193,7 @@ In-memory сховище сервера призначене лише для р�
 
 Попередні HTTPS-адаптери тепер є необов'язковим модулем сумісності
 `:tracker-http`. Для них додайте
-`implementation("com.exkmptracker:tracker-http:1.1.0")`; у Swift зберіть
+`implementation("com.exkmptracker:tracker-http:1.1.6")`; у Swift зберіть
 `:tracker-http:assembleExKMPTrackerHttpReleaseXCFramework` і підключайте
 цей framework **замість**, а не поряд із core framework.
 Це не транспорт для нового CoopNav backend: його AuthPlugin очікує

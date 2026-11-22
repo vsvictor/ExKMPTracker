@@ -2,7 +2,7 @@
 
 [Українською](tracking.uk.md) | **English**
 
-This document describes the ExKMPTracker 1.1.0 positioning pipeline: sources,
+This document describes the ExKMPTracker 1.1.6 positioning pipeline: sources,
 estimation, predictions, and the path of a point from a native event to server
 acknowledgement. It is a Kotlin Multiplatform implementation, not a Flutter wrapper.
 The short contract is in [algorithm.md](algorithm.md).
@@ -72,7 +72,9 @@ the autonomous EKF until section 2 is enabled. Changes relative to 1.0.0 are in
 
 The passive provider is not read: another app's fix is not a second independent measurement.
 The moving interval is 1 s. In `STILL`, Android keeps a precise watchdog every 5 s and does
-not turn location off. iOS does not stop Core Location. On iOS the source is `gps` when the
+not turn location off. Changing that interval does not remove the callback. The first fused
+result is not withheld until a precise solution; a cached fix at most 5 seconds old may be
+delivered. iOS does not stop Core Location. On iOS the source is `gps` when the
 OS is older than 14, or full-accuracy authorization is granted, and the radius is within the
 GNSS gate; otherwise the fix is labelled `fused`.
 
@@ -102,8 +104,11 @@ Every incoming position passes, in order:
 6. **Anti-fake checks** (when `antiFake` is on):
    - mock locations are rejected;
    - speed above 220 km/h is rejected;
-   - after a signal gap longer than 15 s, the implied speed between the last fix and the new
-     one — `(distance − accuracy − 100 m) / Δt` — must not exceed 220 km/h (the teleport check).
+   - implied speed `(distance − accuracy − 100 m) / Δt` must not exceed 220 km/h.
+     Against the last accepted fix this applies after a gap longer than 15 s.
+     A GNSS/fused sample coarser than 65 m, or a network sample coarser than 150 m,
+     is not published, but it remains a jump anchor. Displacement from that anchor
+     is tested immediately, so the next precise fix cannot teleport away from it.
 7. **Time monotonicity** — a fix with `monotonicSeconds ≤` the filter's last update time is
    rejected as stale.
 8. **χ² outlier gate** — see section 4.6.
@@ -127,8 +132,9 @@ Geodetic conversion uses a spherical Earth, `R = 6 371 000 m`:
 E = Δλ · R · cos(φ₀)      N = Δφ · R
 ```
 
-If more than 15 s pass without a fix, the next accepted fix reinitializes the filter. It
-still has to pass the teleport check against the last fix.
+If more than 15 s pass without an accepted fix, the next accepted fix reinitializes the filter.
+It still has to pass the teleport check against the last accepted fix, or against a coarse
+sample kept only as a jump anchor.
 
 ### 4.2 Accuracy and variance
 
@@ -137,8 +143,11 @@ For a symmetric 2D Gaussian the radius that contains 68% of the probability mass
 `r² = χ²₂(0.68) · σ²`, where `χ²₂(0.68) = 2.27886856637673`. Therefore:
 
 - per-axis measurement variance is `σ² = σ_eff² / 2.27886856637673`;
-- `σ_eff = max(3 m, accuracy)` for GNSS/fused. For network, 30 m is added in quadrature
-  first: an optimistic cell or Wi-Fi radius cannot collapse the covariance;
+- `σ_eff = max(3 m, accuracy × cn0Scale)` for GNSS/fused. `cn0Scale` is 1 at a mean
+  C/N0 of the satellites used in the fix ≥ 32 dB-Hz, 3 at ≤ 20 dB-Hz, and linear
+  between. Fewer than four used satellites use the weak end. No C/N0 report means
+  scale 1, which is every iOS fix. For network, 30 m is added in quadrature first
+  and C/N0 is not applied: an optimistic cell or Wi-Fi radius cannot collapse the covariance;
 - the filter's reported accuracy (section 4.7) is the inverse of the same 68% convention.
 
 ### 4.3 Initialization
@@ -265,20 +274,24 @@ filter. If the hold is no longer active, activity becomes UNKNOWN and the fast l
 stream returns.
 
 **Stop hold before STILL.** While the IMU is quiet (≥ 10 samples below 0.2 m/s²) and GNSS
-speed confirms a stop, the parked fix becomes a held point: each fix and tick queues the
-same point at speed 0. After a precise fix faster than **0.5 m/s**, one later slow sample
+speed confirms a stop, the parked fix becomes a held point at speed 0. Each tick
+refreshes the map estimate; the queue keeps a single stationary point until departure. After a precise fix faster than **0.5 m/s**, one later slow sample
 is not enough: two consecutive slow precise fixes are required. The first fix of a session,
 with no prior motion, may start the hold immediately. A network anchor is replaced once by
-the first GNSS/fused fix. Exit: speed **> 1 m/s** or displacement
-**> max(20 m, 2.5 × accuracy)**. Network fixes never end a stop. Raw fixes are still
-measured for parking-drift statistics.
+the first GNSS/fused fix. A precise fix that remains inside 25 m for 15 s also
+starts the hold when Doppler still reports a crawl. Noise that reverses is published
+at the coordinate where the blob started, so the pin does not walk. The filter still
+accepts every fix. A straight crawl or a real turn is not pinned and is not turned
+into a stop, so that motion keeps the filter's position. Exit takes two consecutive
+non-network fixes that are each faster than **1 m/s** and farther than
+**max(20 m, 2.5 × accuracy)**. A speed spike or one position jump does not end the
+stop. Network fixes never end a stop. Raw fixes are still measured for parking-drift
+statistics.
 
-The held point is then refined **once** to the inverse-variance weighted mean (weight
-1/accuracy²) of accepted non-network fixes — after at least **10** such fixes, and only
-when the mean is at least twice as precise as the published point. The mean is not trusted
-beyond a quarter of the best single fix. A parked point therefore moves at most twice
-(network replaced by GNSS, then one refinement). Refinement does not require the fix
-accuracy to be ≤ 20 m. Network fixes cannot refine the anchor.
+After a precise hold begins, the anchor coordinate does not move and a second
+stationary point is not queued. A network anchor is replaced once by the first
+GNSS or fused fix; that replacement is the accurate position, and later fixes do
+not shift it.
 
 Short IMU jolts do not clear the hold. It also ends after **5 s** of continuous IMU motion
 if those 5 s contained no precise fix. A stop between fixes keeps the last queued point,
@@ -425,6 +438,8 @@ contract is described in [algorithm.md](algorithm.md) and [coopnav.md](coopnav.m
 | GNSS/fused accuracy gate | 65 m | `maxGnssAccuracyMeters` |
 | Network accuracy gate | 150 m | `maxNetworkAccuracyMeters` |
 | Position σ floor | 3 m | `positionVariance` |
+| C/N0 full trust / triple sigma | ≥ 32 / ≤ 20 dB-Hz, linear between | `weakCn0SigmaScale` |
+| Satellites in that C/N0 mean | ≥ 4 used in the fix | `strongCn0FromUsed` |
 | Extra network σ | 30 m in quadrature | `positionVariance` |
 | Tangent-plane recenter | 2 km | `recenterTangentPlane` |
 | Prediction quality limit | 100 m | `maxEstimateAccuracyMeters` |
@@ -445,11 +460,15 @@ contract is described in [algorithm.md](algorithm.md) and [coopnav.md](coopnav.m
 | Barometer veto | \|dP/dt\| ≥ 0.02 hPa/s | `TrackerBloc` |
 | Step length | 0.75 m | `pedestrianSteps` |
 | Stationary accuracy growth | 0.1 m/s, added growth ≤ 15 m | `StopAnchor` |
-| Stop hold speed enter / exit | < 0.5 / > 1 m/s; after motion, 2 slow fixes | `TrackerBloc`, `StopAnchor` |
-| Stop hold displacement exit | > max(20 m, 2.5 × accuracy) | `StopAnchor` |
+| Stop hold speed enter / exit | < 0.5 to enter; exit needs 2 fixes > 1 m/s and beyond the displacement gate | `TrackerBloc`, `StopAnchor` |
+| Stop hold displacement exit | 2 fixes > max(20 m, 2.5 × accuracy), each also > 1 m/s | `StopAnchor` |
+| Parked blob | inside 25 m for 15 s, and not straight travel or a real turn | `ParkedMotion` |
+| Oscillating noise | published at the blob origin | `ParkedMotion` |
+| Parked jitter, not recorded | < 30 m while both speeds < 3 m/s | `TrackThrottle` |
+| Unmatched Doppler, not recorded | ground speed < 25% of reported speed, move ≥ 1 m | `TrackThrottle` |
 | STILL location watchdog | 5 s, high accuracy | `AndroidLocationSource` |
 | Stop hold IMU-motion reset | 5 s without a GNSS/fused fix | `TrackerBloc` |
-| Stop-point refinement | once, ≥ 10 non-network fixes, ≥ 2× tighter, floor best/4 | `StopAnchor` |
+| Precise anchor coordinate | fixed; network anchor replaced once by GNSS/fused | `StopAnchor` |
 | Network redundancy window | 10 s after a GNSS/fused fix | `TrackerBloc` |
 | Throttle at 8 m/s | 25 m / 10° / 30 s | `TrackThrottle` |
 | Throttle at ≤ 2 m/s | 100 m / 30° / 120 s | `TrackThrottle` |

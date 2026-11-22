@@ -141,8 +141,12 @@ its own product policy permits restoration.
   against `NSDate`.
 - A fix is labelled `gps` only when horizontal accuracy meets `maxGnssAccuracyMeters` and iOS
   reports Full Accuracy. Before iOS 14 that authorization flag does not exist, so a precise
-  sample is labelled `gps`. Otherwise the source is `fused`. Speed/course and their accuracy
-  values are passed only when CoreLocation reports them as valid.
+  sample is labelled `gps`. Otherwise the source is `fused`. That label is not a precision
+  guarantee: Core Location can still report a 50–65 m radius under Full Accuracy, and iOS
+  has no separate network provider. Such a sample is coarse. For 10 seconds after a fix of
+  ≤ 25 m it is ignored, and for 60 seconds it cannot reinitialize the filter. Speed/course
+  and their accuracy values are passed only when CoreLocation reports them as valid.
+  The value drawn by the map is the filter radius, not this sample's `horizontalAccuracy`.
 - `isSimulatedBySoftware` is checked on iOS 15 and later. On older iOS versions the value is
   conservatively `false` because the platform does not expose that signal; `false` is not proof
   that a sample is genuine.
@@ -201,8 +205,9 @@ its own product policy permits restoration.
   monitoring could at most aid coarse recovery and is not a replacement for that wake check.
   Device/simulator availability and permission can vary; unavailable sensors are exposed by
   `sensorCapabilities` and reported as `PlatformError`.
-- iOS does not expose raw GNSS receiver clock measurements or AGC. The runtime emits no
-  fabricated `Gnss` evidence. iOS also does not expose total network traffic for the app UID;
+- iOS does not expose raw GNSS receiver clock measurements, AGC, or the C/N0 of
+  satellites used in the fix. Android can widen a weak fix from that C/N0; iOS cannot,
+  and the runtime emits no fabricated `Gnss` evidence. iOS also does not expose total network traffic for the app UID;
   `IosTrafficCounter` throws `UnsupportedOperationException` rather than returning invented
   zeroes.
 - `TrackerClock` monotonic time is Darwin `clock_gettime(CLOCK_MONOTONIC_RAW)`, which keeps
