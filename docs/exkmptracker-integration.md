@@ -3,14 +3,14 @@
 Library / Бібліотека: <https://github.com/vsvictor/ExKMPTracker>
 
 **EN.** This guide covers integration into other Android, Kotlin Multiplatform and
-Swift applications. Examples target library version `1.1.2`.
+Swift applications. Examples target library version `1.1.6`.
 Changes since 1.0.0 are in [changelog.md](changelog.md). The host application
 owns authentication, permission requests, networking and lifecycle decisions.
 ExKMPTracker supplies positioning, sensor fusion, native background adapters and
 an encrypted delivery queue.
 
 **UK.** Інструкція описує підключення до інших Android-, Kotlin Multiplatform-
-і Swift-застосунків. Приклади відповідають версії бібліотеки `1.1.2`.
+і Swift-застосунків. Приклади відповідають версії бібліотеки `1.1.6`.
 Зміни відносно 1.0.0 зібрано в [changelog.uk.md](changelog.uk.md).
 Хост керує авторизацією, запитами дозволів, мережею та життєвим циклом.
 ExKMPTracker надає позиціювання, об'єднання сенсорних даних, нативні адаптери
@@ -61,11 +61,11 @@ Android передає `TrackerMapboxLocationProvider` у `mapView.location` д�
 ## 1. Git and Gradle / Git і Gradle
 
 **EN.** Run in the host repository root. The submodule pins a specific library
-commit; `1.1.2` below is the composite-build coordinate, not a claim that the
+commit; `1.1.6` below is the composite-build coordinate, not a claim that the
 artifact is published to Maven Central.
 
 **UK.** Виконайте в корені репозиторію хоста. Submodule фіксує конкретний commit
-бібліотеки; `1.1.2` нижче — координата composite build, а не твердження про
+бібліотеки; `1.1.6` нижче — координата composite build, а не твердження про
 публікацію артефакту в Maven Central.
 
 ```bash
@@ -92,7 +92,7 @@ includeBuild(trackerBuild)
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("com.exkmptracker:tracker:1.1.2")
+            implementation("com.exkmptracker:tracker:1.1.6")
         }
     }
 }
@@ -106,7 +106,7 @@ uses the native service APIs. For an Android-only project, this is sufficient:
 
 ```kotlin
 dependencies {
-    implementation("com.exkmptracker:tracker:1.1.2")
+    implementation("com.exkmptracker:tracker:1.1.6")
 }
 ```
 

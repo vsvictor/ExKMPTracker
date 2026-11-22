@@ -47,6 +47,10 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
     private var originLongitude = 0.0
     private var time = Double.NEGATIVE_INFINITY
     private var lastFix: LocationFix? = null
+    /** Last real position, including a coarse sample that was too inaccurate to publish. */
+    private var jumpAnchor: LocationFix? = null
+    /** True when [jumpAnchor] never entered the filter, so the 15 s gap rule cannot see it. */
+    private var jumpAnchorUnpublished = false
     private var rejectedLatitude = Double.NaN
     private var rejectedLongitude = Double.NaN
     private var rejectedCluster = 0
@@ -68,19 +72,18 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
             constrainLateral: Boolean = false, strongCn0DbHz: Double? = null): TrackEstimate? {
         rejection = validate(fix)
         if (rejection != null) return null
-        val previous = lastFix
-        if (previous != null && fix.monotonicSeconds <= time) return reject("Non-monotonic fix")
         if (config.antiFake) {
             if (fix.isMock) return reject("Mock location")
             if (fix.speedMps > MAX_SPEED) return reject("Speed exceeds 220 km/h")
-            if (previous != null) {
-                val gap = fix.monotonicSeconds - previous.monotonicSeconds
-                if (gap > config.predictionHorizonSeconds &&
-                    (distanceMeters(previous.latitude, previous.longitude, fix.latitude, fix.longitude) -
-                        fix.accuracyMeters - 100.0) / gap > MAX_SPEED
-                ) return reject("Implausible position after signal gap")
-            }
+            if (implausibleJump(fix)) return reject("Implausible position jump")
         }
+        if (exceedsAccuracyGate(fix)) {
+            // A coarse teleport must not become the reference the next fix is measured from.
+            if (!displacesTooFast(fix)) rememberJumpAnchor(fix, unpublished = true)
+            return reject("Accuracy exceeds source threshold")
+        }
+        val previous = lastFix
+        if (previous != null && fix.monotonicSeconds <= time) return reject("Non-monotonic fix")
         val variance = positionVariance(fix, strongCn0DbHz)
         val gap = if (previous == null) Double.POSITIVE_INFINITY else fix.monotonicSeconds - previous.monotonicSeconds
         if (previous == null || gap > config.predictionHorizonSeconds) {
@@ -117,7 +120,7 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
                 // are a new position, not a lock on the previous bias.
                 if (fix.isPreciseFix() && noteRejectedCluster(fix)) {
                     resetTo(fix, variance)
-                    lastFix = fix
+                    acceptReference(fix)
                     rejection = null
                     return estimate(fix.source)
                 }
@@ -131,8 +134,49 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
                 update(3, fix.bearingDegrees * RADIANS, headingVariance(fix))
             }
         }
-        lastFix = fix
+        acceptReference(fix)
         return estimate(fix.source)
+    }
+
+    /**
+     * A coarse sample must not become the published position, but it is still a place.
+     * The next fix is measured from it at once. Waiting for a 15 s gap would ignore the
+     * sample, because it never became [lastFix].
+     */
+    private fun implausibleJump(fix: LocationFix): Boolean {
+        val anchor = jumpAnchor ?: return false
+        val gap = fix.monotonicSeconds - anchor.monotonicSeconds
+        if (!gap.isFinite() || gap <= 0.0) return false
+        val guardsThisGap = jumpAnchorUnpublished || gap > config.predictionHorizonSeconds
+        return guardsThisGap && displacesTooFast(fix)
+    }
+
+    /** Implied speed above 220 km/h after the 100 m slack. A short gap from a published fix is allowed through. */
+    private fun displacesTooFast(fix: LocationFix): Boolean {
+        val anchor = jumpAnchor ?: return false
+        val gap = fix.monotonicSeconds - anchor.monotonicSeconds
+        if (!gap.isFinite() || gap <= 0.0) return false
+        val excess = distanceMeters(anchor.latitude, anchor.longitude, fix.latitude, fix.longitude) -
+            fix.accuracyMeters - JUMP_SLACK_METERS
+        return excess > 0.0 && excess / gap > MAX_SPEED
+    }
+
+    private fun acceptReference(fix: LocationFix) {
+        lastFix = fix
+        rememberJumpAnchor(fix, unpublished = false)
+    }
+
+    private fun rememberJumpAnchor(fix: LocationFix, unpublished: Boolean) {
+        val current = jumpAnchor
+        if (current != null && fix.monotonicSeconds < current.monotonicSeconds) return
+        if (current != null && fix.monotonicSeconds == current.monotonicSeconds && unpublished && !jumpAnchorUnpublished) return
+        jumpAnchor = fix
+        jumpAnchorUnpublished = unpublished
+    }
+
+    private fun exceedsAccuracyGate(fix: LocationFix): Boolean {
+        val limit = if (fix.source == LocationSource.network) config.maxNetworkAccuracyMeters else config.maxGnssAccuracyMeters
+        return fix.accuracyMeters > limit
     }
 
     fun predict(now: Double, acceleration: Double, yawRate: Double,
@@ -314,7 +358,6 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
             f.speedMps, f.bearingDegrees).all { it.isFinite() } -> "Non-finite fix"
         abs(f.latitude) > 90 || abs(f.longitude) > 180 -> "Invalid coordinates"
         f.accuracyMeters <= 0 -> "Invalid accuracy"
-        f.accuracyMeters > if (f.source == LocationSource.network) config.maxNetworkAccuracyMeters else config.maxGnssAccuracyMeters -> "Accuracy exceeds source threshold"
         f.speedMps < 0 && f.speedMps != -1.0 -> "Invalid speed"
         f.bearingDegrees != -1.0 && f.bearingDegrees !in 0.0..<360.0 -> "Invalid bearing"
         else -> null
@@ -394,6 +437,7 @@ class TrackingFilter(private val config: TrackerConfig = TrackerConfig()) {
         private const val CHI_68 = 2.27886856637673
         private const val CHI_SQUARE_GATE = 13.8155
         private const val MAX_SPEED = 220.0 / 3.6
+        private const val JUMP_SLACK_METERS = 100.0
         private const val MIN_POSITION_SIGMA_METERS = 3.0
         private const val COARSE_REINIT_SECONDS = 60.0
         private const val NETWORK_SIGMA_METERS = 30.0

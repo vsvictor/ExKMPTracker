@@ -20,9 +20,14 @@ class TrackThrottle(private val config: TrackerConfig = TrackerConfig()) {
 
     fun shouldRecord(estimate: TrackEstimate): Boolean {
         val last = previous ?: return true
-        if (departure(last, estimate) || speedStep(last, estimate) ||
-            sourceRecovered(last, estimate) || becameStationary(last, estimate) ||
+        // A held stop is one coordinate. A later copy, however far the mean moved, is not mileage.
+        if (last.source == LocationSource.stationary && estimate.source == LocationSource.stationary) return false
+        if (becameStationary(last, estimate) || sourceRecovered(last, estimate) ||
             accuracyShifted(last, estimate)) return true
+        // A same-place speed glitch is jitter. A departure that actually moved is kept.
+        if (parkedJitter(last, estimate)) return false
+        if (departure(last, estimate) || speedStep(last, estimate)) return true
+        if (unmatchedDrift(last, estimate)) return false
         val gates = gates(estimate.speedMps)
         val turned = estimate.speedMps >= turnSpeedFloor(estimate.speedMps) &&
             bearingDeltaDegrees(last.bearingDegrees, estimate.bearingDegrees) >= gates.bearingDegrees
@@ -86,6 +91,26 @@ class TrackThrottle(private val config: TrackerConfig = TrackerConfig()) {
     private fun becameStationary(last: TrackEstimate, next: TrackEstimate) =
         last.source != LocationSource.stationary && next.source == LocationSource.stationary
 
+    /** Both ends are slower than a real departure and the point has not left the parking blob. */
+    private fun parkedJitter(last: TrackEstimate, next: TrackEstimate) =
+        last.speedMps < PARK_JITTER_SPEED_MPS && next.speedMps < PARK_JITTER_SPEED_MPS &&
+            distanceMeters(last.latitude, last.longitude, next.latitude, next.longitude) < PARK_JITTER_METERS
+
+    /**
+     * Reported speed without a matching ground track is Doppler noise.
+     * A heartbeat that stays on the same coordinate still passes: its length is zero.
+     * A real relocation over the same interval has an implied speed near the reported one.
+     */
+    private fun unmatchedDrift(last: TrackEstimate, next: TrackEstimate): Boolean {
+        val moved = distanceMeters(last.latitude, last.longitude, next.latitude, next.longitude)
+        val dt = next.monotonicSeconds - last.monotonicSeconds
+        if (moved < 1.0 || dt < 1.0) return false
+        // A gap that already crosses the distance gate is missed travel, not noise.
+        if (moved >= gates(next.speedMps).distanceMeters) return false
+        val reported = max(last.speedMps, next.speedMps)
+        return reported >= 1.0 && moved / dt < reported * 0.25
+    }
+
     private fun accuracyShifted(last: TrackEstimate, next: TrackEstimate): Boolean {
         val worse = next.accuracyMeters - last.accuracyMeters >= ACCURACY_WORSE_METERS
         val better = last.accuracyMeters - next.accuracyMeters >= ACCURACY_BETTER_METERS &&
@@ -113,6 +138,8 @@ class TrackThrottle(private val config: TrackerConfig = TrackerConfig()) {
         const val SLOW_TURN_SPEED_MPS = 0.5
         const val DEPARTURE_FROM_MPS = 1.0
         const val DEPARTURE_TO_MPS = 2.0
+        const val PARK_JITTER_SPEED_MPS = 3.0
+        const val PARK_JITTER_METERS = 30.0
         const val SHARP_SPEED_CHANGE_MPS = 5.0
         const val ACCURACY_WORSE_METERS = 40.0
         const val ACCURACY_BETTER_METERS = 25.0

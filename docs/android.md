@@ -125,7 +125,10 @@ This increases battery usage and does not override Android Doze or OEM power res
   even before the first moving fix. `STILL` wake samples carry magnitude with both controls `null`.
   Missing hardware is reported through `PlatformError` and the injected logger.
 - In `STILL`, precise sensors and raw GNSS callbacks pause. Location continues as a 5-second
-  high-accuracy watchdog so a real departure can release the stop anchor. A low-rate accelerometer and
+  high-accuracy watchdog so a real departure can release the stop anchor. Switching that
+  interval does not remove the location callback. The first fused result is not withheld
+  until a precise solution; a cached fix at most 5 seconds old may be delivered. A real
+  outage still clears the estimate after 15 seconds, which hides the map pin. A low-rate accelerometer and
   a hardware significant-motion trigger are retained where available; three acceleration samples
   over 0.8 m/s² wake precise motion sensing. Wake detection subtracts the last trusted gravity
   vector and adjusts that baseline only below 0.2 m/s². Hardware support and sample cadence vary by device.
