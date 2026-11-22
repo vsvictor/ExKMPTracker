@@ -2,7 +2,8 @@
 
 [Українська](algorithm.uk.md)
 
-The behavioral source is `TMSDriver/doc/tracking.uk.md` and `traffic.uk.md`.
+The behavioral source is [tracking](tracking.md) and [traffic](traffic.md).
+Changes since 1.0.0 are in the [changelog](changelog.md).
 This project is an independent implementation, not a Flutter wrapper.
 The rules below describe enabled section 1. See [CoopNav sections](coopnav.md)
 for raw pass-through when section 1 is off and the optional cooperative branch.
@@ -22,15 +23,31 @@ The host retains ownership of its existing authenticated RPC connection and supp
 
 The four-state EKF uses east/north metres, speed and clockwise heading:
 
-- GNSS/fused accuracy ≤ 20 m; network ≤ 50 m.
+- GNSS/fused accuracy ≤ 65 m; network ≤ 150 m. Honest urban fixes stay in the
+  filter. Their variance is the provider radius, with a 3 m floor, and network
+  adds 30 m in quadrature so a cell/Wi-Fi radius cannot collapse the covariance.
+  On Android the GNSS/fused sigma is also scaled by the mean C/N0 of satellites
+  used in the fix: unchanged at ≥ 32 dB-Hz, tripled at ≤ 20 dB-Hz, linear between.
+  Fewer than four used satellites count as the weak end. A missing C/N0 report,
+  every iOS fix, and every network fix keep the unscaled radius. This does not
+  change the 25 m precise-fix rule.
 - Fix age in monotonic time: `-2 < age ≤ 10` seconds. Native providers preserve
   observation age; arrival time is never substituted for observation time.
-- Network fallback is suppressed for 10 seconds after an accepted precise fix.
+- A precise fix has accuracy ≤ 25 m and is not network. Network and coarser fixes
+  are suppressed for 10 seconds after one. A coarse fix cannot reinitialize the
+  filter for 60 seconds after a precise fix, so an iOS sample of about 50–65 m
+  cannot replace a tight lock. The reported radius is never below 3 m.
+  Android feeds one precise stream: fused location, or platform GPS only after
+  fused location fails, or network only when neither precise provider starts.
 - Android 68% horizontal radius converts to per-axis variance using
   `2.27886856637673`; reported uncertainty uses the largest covariance eigenvalue.
 - Position innovations must pass the 2D 99.9% chi-square gate (`13.8155`).
+  A single failure leaves the state unchanged. Three consecutive precise fixes
+  (accuracy ≤ 25 m) that agree with each other reinitialize the filter, so a biased
+  lock can be left. A coarse cluster cannot.
 - Speed/course accuracy uses provider values with conservative fallbacks.
-  Course updates require speed > 2 m/s.
+  Course updates require speed > 0.5 m/s. Speed below 0.3 m/s is integrated;
+  it is not forced to zero.
 - Prediction uses ≤ 0.1 s steps, acceleration clamped to ±6 m/s², yaw to
   ±3 rad/s, Joseph covariance updates, and lower lateral noise in vehicle mode.
   Active native IMU requests target 50 Hz. The filter integrates timestamped control
@@ -46,35 +63,53 @@ The four-state EKF uses east/north metres, speed and clockwise heading:
   rather than double-counting fresh GNSS displacement. Step events need a
   monotonic observation timestamp no older than 2 seconds; suspended backlogs
   must not be relabelled as fresh steps.
-- Mock fixes and speed/long-gap teleportation > 220 km/h are rejected by default.
+- Mock fixes, reported speed above 220 km/h, and a position jump faster than 220 km/h
+  are rejected by default. The jump check runs after a gap of more than 15 s, and
+  immediately against a coarse fix that was too inaccurate to enter the filter.
   AGC/CN0 and clock checks are heuristics, not proof of authenticity.
   Radio jumps set `SUSPECTED_INTERFERENCE` and `SUSPECTED_SPOOFING`; the earlier
   camel-case flag aliases remain present for compatibility.
 
 The local tangent-plane conversion uses the specification's spherical Earth
-(`R = 6371000 m`), not survey-grade geodesy. Long uninterrupted trips and polar
-regions require evaluation against reference data; no centimetre-level claim is
-made. GNSS accuracy is a provider estimate, not independently measured error.
+(`R = 6371000 m`), not survey-grade geodesy. The origin recenters after a 2 km
+move so the motion model stays in local metres. Polar regions still require
+evaluation against reference data; no centimetre-level claim is made.
+GNSS accuracy is a provider estimate, not independently measured error.
 Map matching is an optional injected `MapMatcher` and is **off by default**.
 No road graph or RTK correction service is bundled.
 
 ## Stationary behaviour
 
 A confirmed stop repeats a fixed anchor at zero speed. Quiet IMU plus reported
-GNSS speed < 0.5 m/s enters a hold; speed > 1.5 m/s or an accurate displacement
-> `max(50 m, 3 × accuracy)` exits it. Network fixes cannot release a stop.
-Transient jolts cannot release the hold. Five seconds of continuous IMU motion
-can release it only without a precise fix during those five seconds.
+GNSS speed < 0.5 m/s enters a hold. A precise fix that stays inside 25 m for 15 s
+also enters it, even when Doppler still reports a crawl, so parked wander is not
+travel. After a precise fix faster than 0.5 m/s, one later slow sample does not:
+two consecutive slow precise fixes are required. Two consecutive non-network
+fixes that are both faster than 1 m/s and farther than `max(20 m, 2.5 × accuracy)`
+exit the hold. A speed spike or a single position jump does not. Network fixes
+cannot release a stop. Transient jolts cannot release the hold.
+Five seconds of continuous IMU motion can release it only without a precise fix
+during those five seconds.
 
-The anchor can be replaced once from network to GNSS and refined once after
-≥ 10 precise fixes using inverse-variance weights, a 2× improvement requirement
-and a best-single-fix/4 accuracy floor. Stationary uncertainty grows 0.1 m/s.
-On Android, activity-based STILL pauses expensive native sensors while retaining
-a motion wake source. iOS retains continuous Core Location: motion callbacks
-alone cannot reliably wake a suspended app. STILL received before the first fix is deferred until an anchor
+The anchor coordinate is fixed after a precise hold begins. It is replaced once
+from network to GNSS, and that first precise fix is the accurate position; later
+fixes do not move the pin or add a segment. Oscillating GNSS noise is published
+at the coordinate where that blob started. The filter still accepts every fix,
+and a straight crawl or a real turn is not pinned, so slow travel keeps the
+filter's accuracy. Stationary uncertainty grows 0.1 m/s
+only after the last precise fix, and the added growth is capped at 15 m. A fresh
+precise fix does not inflate the held circle. The published time still advances
+so the map pin does not expire, but that time is not a new measurement. On Android, activity-based STILL pauses
+precise sensors and raw GNSS, and slows location to a 5-second precise watchdog
+instead of stopping it. The interval change does not remove the location callback,
+and the first fused result is not withheld until a precise solution. iOS retains continuous Core Location: motion callbacks
+alone cannot reliably wake a suspended app. Fixes received during STILL still
+update the filter. The published position stays on the anchor until the hold
+releases, and a release leaves STILL so the fast location stream resumes.
+STILL received before the first fix is deferred until an anchor
 exists, avoiding a cold-start deadlock.
-STILL contradicted by a precise driving-speed fix from the last five seconds
-is also deferred until it can be corroborated, rather than switching GNSS off.
+STILL contradicted by a precise fix faster than 1 m/s from the last five seconds
+is also deferred until it can be corroborated, rather than slowing GNSS during motion.
 An expired position cannot be revived as a fresh stationary anchor. An explicit
 STILL anchors the current filter estimate, not an older point skipped by the
 recording throttle.
@@ -89,7 +124,17 @@ being mistaken for a stop when pressure data is available.
 
 ## Persistence and delivery
 
-Record when distance ≥ 25 m, moving heading change ≥ 10°, or elapsed time ≥ 30 s.
+Recording follows speed. The configured 25 m / 10° / 30 s gates apply at 8 m/s.
+At about 2 m/s and below they widen to 100 m / 30° / 120 s. At 20 m/s and above
+they tighten to 10 m / 6° / 12 s. A start from under 1 m/s to at least 2 m/s,
+a speed change of at least 5 m/s, a turn, a return from network/dead reckoning/
+stationary to GPS or fused, the first stationary point, and a 40 m accuracy
+worsening or a recovery to ≤ 25 m also record immediately. A step under 30 m
+while both speeds stay under 3 m/s does not record. Reported speed that the
+ground track does not support does not record either. Repeating a stationary
+anchor does not record again, even when the copies differ. Ingest follows the
+same scale: 30 s while slow, 10 s at 8 m/s, and 5 s at highway speed. The server
+stores every accepted point and does not choose this cadence.
 The throttle commits only after durable append succeeds. Prediction/stationary
 points have null raw fields; network points omit speed/course via JSON null.
 Identifiers contain 16 secure random bytes in lowercase hex.

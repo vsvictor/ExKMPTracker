@@ -83,7 +83,7 @@ internal class IosAcceptedCourseReference(private val clock: TrackerClock) {
     }
 
     private companion object {
-        const val MAX_ANCHOR_AGE_SECONDS = 15.0
+        const val MAX_ANCHOR_AGE_SECONDS = 3.0
         const val MIN_COURSE_SPEED_MPS = 1.0
     }
 }

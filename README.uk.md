@@ -1,6 +1,8 @@
-# ExKMPTracker 1.0.0
+# ExKMPTracker 1.1.6
 
 [English](README.md)
+
+Зміни відносно 1.0.0 зібрано в [журналі](docs/changelog.uk.md).
 
 Окрема **бібліотека автомобільного трекінгу Kotlin Multiplatform** для Android
 та iOS. Android використовує нативний Foreground Service типу location;
@@ -70,7 +72,7 @@ JSON-RPC-2-Client-KMP хоста. Ядро не відкриває мереже�
 includeBuild("/Users/victor/ExKMPTracker")
 ```
 
-Потім — `implementation("com.exkmptracker:tracker:1.0.0")` у потрібному
+Потім — `implementation("com.exkmptracker:tracker:1.1.6")` у потрібному
 KMP source set або Android-модулі. Версії Kotlin/AGP мають бути сумісні
 з цією збіркою. Для Swift зберіть і підключіть XCFramework за інструкцією iOS.
 
