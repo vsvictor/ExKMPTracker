@@ -28,8 +28,7 @@ data class YoloConfig(
         )
 
         /**
-         * Four-class head trained for Ukrainian roads.
-         * Indices match `tools/coopnav-dataset`: 0 car, 1 truck, 2 bus, 3 trolleybus.
+         * Four-class head: 0 car, 1 truck, 2 bus, 3 trolleybus.
          */
         fun ukrainianVehicles(units: BoxUnits) = YoloConfig(
             mapOf(
