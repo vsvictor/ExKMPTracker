@@ -8,10 +8,11 @@ import com.exkmptracker.model.Activity
 import com.exkmptracker.model.TrackerConfig
 import com.exkmptracker.model.TrackingSession
 import com.exkmptracker.ports.MapMatcher
+import com.exkmptracker.ports.SessionStore
 import com.exkmptracker.ports.TrackingTransport
 import com.exkmptracker.ports.TrackerLogger
-import com.exkmptracker.ports.SensorController
 import com.exkmptracker.cooperative.*
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,71 +47,42 @@ class AndroidTrackerLogger : TrackerLogger {
 
 /** One runtime is created per foreground-service lifetime. */
 class AndroidTrackerRuntime internal constructor(
-    context: Context,
-    private val provider: AndroidTrackerProvider,
+    private val scope: CoroutineScope,
+    private val logger: TrackerLogger,
+    private val sessionStore: SessionStore,
+    private val queue: EncryptedTrackQueue,
+    private val events: TrackerEventBus,
+    private val blocInstance: TrackerBloc,
+    val sensors: AndroidSensorController,
+    val location: AndroidLocationSource,
+    val gnss: AndroidGnssMonitor,
+    val activityRecognition: AndroidActivityRecognition,
+    private val mainDispatcher: CoroutineDispatcher,
+    private val closeQueueOnShutdown: Boolean,
 ) : Closeable {
-    private val appContext = context.applicationContext
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val logger = provider.createTrackerLogger(appContext)
-    private val sessionStore = EncryptedSessionStore(appContext)
-    private val queue = EncryptedTrackQueue(appContext)
-    private val pendingPlatformErrors = mutableListOf<String>()
-    private lateinit var blocInstance: TrackerBloc
     private var closed = false
     private var queueClosed = false
     private var startedIdentity: com.exkmptracker.model.TrackingIdentity? = null
     private var tickerJob: Job? = null
 
-    @Synchronized
-    internal fun report(message: String, cause: Throwable?) {
-        logger.error(message, cause)
-        if (closed) return
-        if (::blocInstance.isInitialized) {
-            blocInstance.dispatch(TrackerEvent.PlatformError(message))
-        } else {
-            pendingPlatformErrors += message
-        }
-    }
+    internal constructor(context: Context, provider: AndroidTrackerProvider) : this(assembleLegacy(context, provider))
 
-    @Synchronized
-    private fun dispatchIfActive(event: TrackerEvent) {
-        if (!closed && ::blocInstance.isInitialized) blocInstance.dispatch(event)
-    }
+    private constructor(graph: LegacyRuntimeGraph) : this(
+        scope = graph.scope,
+        logger = graph.logger,
+        sessionStore = graph.sessionStore,
+        queue = graph.queue,
+        events = graph.events,
+        blocInstance = graph.bloc,
+        sensors = graph.sensors,
+        location = graph.location,
+        gnss = graph.gnss,
+        activityRecognition = graph.activityRecognition,
+        mainDispatcher = graph.mainDispatcher,
+        closeQueueOnShutdown = true,
+    )
 
-    val sensors = AndroidSensorController(appContext, ::dispatchIfActive, ::report)
-    val location = AndroidLocationSource(appContext, ::dispatchIfActive, ::report)
-    val gnss = AndroidGnssMonitor(appContext, ::dispatchIfActive, ::report)
-    val activityRecognition = AndroidActivityRecognition(appContext, ::report)
-
-    init {
-        try {
-            val transport = provider.createTrackingTransport(appContext)
-            blocInstance = TrackerBloc(
-                scope = scope,
-                clock = AndroidTrackerClock(),
-                queue = queue,
-                transport = transport,
-                idGenerator = SecurePointIdGenerator(),
-                logger = logger,
-                sensors = object : SensorController {
-                    override fun setStationary(stationary: Boolean) =
-                        this@AndroidTrackerRuntime.setStationary(stationary)
-                },
-                config = provider.trackerConfig(appContext),
-                mapMatcher = provider.createMapMatcher(appContext),
-                cooperativeTransport = transport as? CooperativeTransport,
-                vision = provider.createEdgeVisionController(appContext),
-                vehicleClass = provider.vehicleClass(appContext),
-            )
-            synchronized(this) {
-                pendingPlatformErrors.forEach { blocInstance.dispatch(TrackerEvent.PlatformError(it)) }
-                pendingPlatformErrors.clear()
-            }
-        } catch (error: Exception) {
-            close()
-            throw error
-        }
-    }
+    internal fun report(message: String, cause: Throwable?) = events.report(message, cause)
 
     val bloc: TrackerBloc get() = blocInstance
     val sessions get() = sessionStore
@@ -173,6 +145,7 @@ class AndroidTrackerRuntime internal constructor(
             if (closed) return
             closed = true
         }
+        events.close()
         scope.cancel()
         tickerJob = null
         closePlatformComponents()
@@ -180,9 +153,9 @@ class AndroidTrackerRuntime internal constructor(
 
     suspend fun shutdown() {
         quiesce()
-        if (::blocInstance.isInitialized) blocInstance.shutdown()
+        blocInstance.shutdown()
         scope.coroutineContext[Job]?.join()
-        if (!queueClosed) {
+        if (closeQueueOnShutdown && !queueClosed) {
             queueClosed = true
             queue.close()
         }
@@ -190,7 +163,7 @@ class AndroidTrackerRuntime internal constructor(
 
     override fun close() {
         quiesce()
-        CoroutineScope(Dispatchers.Main.immediate).launch { shutdown() }
+        CoroutineScope(mainDispatcher).launch { shutdown() }
     }
 
     private fun closePlatformComponents() {
@@ -219,4 +192,78 @@ class AndroidTrackerRuntime internal constructor(
     }
 
     private companion object { const val TICK_INTERVAL_MS = 1_000L }
+}
+
+private class LegacyRuntimeGraph(
+    val scope: CoroutineScope,
+    val logger: TrackerLogger,
+    val sessionStore: SessionStore,
+    val queue: EncryptedTrackQueue,
+    val events: TrackerEventBus,
+    val bloc: TrackerBloc,
+    val sensors: AndroidSensorController,
+    val location: AndroidLocationSource,
+    val gnss: AndroidGnssMonitor,
+    val activityRecognition: AndroidActivityRecognition,
+    val mainDispatcher: CoroutineDispatcher,
+)
+
+private fun assembleLegacy(context: Context, provider: AndroidTrackerProvider): LegacyRuntimeGraph {
+    val appContext = context.applicationContext
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val logger = provider.createTrackerLogger(appContext)
+    val events = TrackerEventBus(logger)
+    val sessionStore = EncryptedSessionStore(appContext, Dispatchers.IO)
+    val queue = EncryptedTrackQueue(appContext, Dispatchers.IO)
+    val sensors = AndroidSensorController(appContext, events)
+    val location = AndroidLocationSource(appContext, events)
+    val gnss = AndroidGnssMonitor(appContext, events)
+    val activityRecognition = AndroidActivityRecognition(appContext, events)
+    try {
+        val transport = provider.createTrackingTransport(appContext)
+        val bloc = TrackerBloc(
+            scope = scope,
+            clock = AndroidTrackerClock(),
+            queue = queue,
+            transport = transport,
+            idGenerator = SecurePointIdGenerator(),
+            logger = logger,
+            sensors = androidStationaryControl(location, gnss, sensors),
+            config = provider.trackerConfig(appContext),
+            mapMatcher = provider.createMapMatcher(appContext),
+            cooperativeTransport = transport as? CooperativeTransport,
+            vision = provider.createEdgeVisionController(appContext),
+            vehicleClass = provider.vehicleClass(appContext),
+        )
+        events.attach(bloc)
+        return LegacyRuntimeGraph(
+            scope = scope,
+            logger = logger,
+            sessionStore = sessionStore,
+            queue = queue,
+            events = events,
+            bloc = bloc,
+            sensors = sensors,
+            location = location,
+            gnss = gnss,
+            activityRecognition = activityRecognition,
+            mainDispatcher = Dispatchers.Main.immediate,
+        )
+    } catch (error: Exception) {
+        events.close()
+        scope.cancel()
+        listOf(activityRecognition, location, gnss, sensors).forEach { component ->
+            try {
+                component.close()
+            } catch (cleanup: Exception) {
+                logger.error("Android tracker component cleanup failed", cleanup)
+            }
+        }
+        try {
+            queue.close()
+        } catch (cleanup: Exception) {
+            logger.error("Android tracker queue cleanup failed", cleanup)
+        }
+        throw error
+    }
 }

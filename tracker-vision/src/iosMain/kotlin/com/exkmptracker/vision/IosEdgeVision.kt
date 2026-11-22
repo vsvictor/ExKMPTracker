@@ -32,7 +32,7 @@ fun iosEdgeVision(
     },
 )
 
-private inline fun <T : Any> appleResult(
+internal inline fun <T : Any> appleResult(
     operation: String,
     call: (CPointer<ObjCObjectVar<NSError?>>) -> T?,
 ): T = memScoped {
@@ -41,7 +41,7 @@ private inline fun <T : Any> appleResult(
     call(error.ptr) ?: kotlin.error("$operation failed (${error.value?.domain ?: "unknown"}:${error.value?.code ?: 0})")
 }
 
-private class CoreMlYoloBackend(model: MLModel) : YoloBackend {
+internal class CoreMlYoloBackend(model: MLModel) : YoloBackend {
     private var model: MLModel? = model
     private val inputName: String
     private val outputName: String

@@ -53,6 +53,11 @@ internal interface YoloBackend {
     fun close()
 }
 
+/** Opens a backend on the TrackerVision thread. The factory must not call [open]. */
+internal fun interface YoloBackendOpener {
+    fun open(): YoloBackend
+}
+
 internal class OutputLayout(shape: IntArray) {
     private val dimensions = when {
         shape.size == 2 -> shape

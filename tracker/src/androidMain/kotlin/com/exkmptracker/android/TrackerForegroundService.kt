@@ -20,9 +20,12 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.exkmptracker.R
+import com.exkmptracker.di.TrackerQualifiers
+import com.exkmptracker.di.declares
 import com.exkmptracker.model.Activity as TrackerActivity
 import com.exkmptracker.model.TrackingSession
 import com.exkmptracker.bloc.TrackerState
+import com.exkmptracker.ports.SessionStore
 import com.google.android.gms.location.ActivityTransition
 import com.google.android.gms.location.ActivityTransitionEvent
 import com.google.android.gms.location.DetectedActivity
@@ -40,18 +43,30 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineDispatcher
+import org.koin.core.component.KoinComponent
+import org.koin.core.qualifier.named
+import org.koin.mp.KoinPlatform
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.util.UUID
 
 /**
  * The host must explicitly start this service from a visible Activity after confirming a shift
  * and obtaining the permissions listed by [AndroidTracker.permissionsForHost].
  */
-class TrackerForegroundService : Service() {
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+class TrackerForegroundService : Service(), KoinComponent {
+    private val serviceScope: CoroutineScope by lazy {
+        val dispatcher = KoinPlatform.getKoinOrNull()
+            ?.takeIf { it.declares(CoroutineDispatcher::class) }
+            ?.getOrNull<CoroutineDispatcher>(TrackerQualifiers.main)
+            ?: Dispatchers.Main.immediate
+        CoroutineScope(SupervisorJob() + dispatcher)
+    }
     private val lifecycleMutex = Mutex()
     private var runtime: AndroidTrackerRuntime? = null
+    private var koinScope: org.koin.core.scope.Scope? = null
     private var stateJob: Job? = null
     private var currentSession: TrackingSession? = null
     private var stopping = false
@@ -186,6 +201,7 @@ class TrackerForegroundService : Service() {
                                 wakeLock.stop()
                                 runtime?.close()
                                 runtime = null
+                                closeRuntimeScope()
                                 stopForeground(STOP_FOREGROUND_REMOVE)
                                 stopSelf(startId)
                             }
@@ -225,6 +241,7 @@ class TrackerForegroundService : Service() {
                 previous.sessions.clear()
             } finally {
                 withContext(NonCancellable) { previous.shutdown() }
+                closeRuntimeScope()
             }
         }
         if (stopping) return
@@ -248,6 +265,7 @@ class TrackerForegroundService : Service() {
             if (restored == null) {
                 fresh.close()
                 runtime = null
+                closeRuntimeScope()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return null
@@ -262,6 +280,7 @@ class TrackerForegroundService : Service() {
             wakeLock.stop()
             fresh.close()
             runtime = null
+            closeRuntimeScope()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return null
@@ -269,6 +288,28 @@ class TrackerForegroundService : Service() {
     }
 
     private fun createRuntime(): AndroidTrackerRuntime? {
+        val koin = KoinPlatform.getKoinOrNull()
+        if (koin != null) {
+            return try {
+                val scope = koin.createScope(
+                    "exkmptracker.runtime.${UUID.randomUUID()}",
+                    named("exkmptracker.runtime"),
+                )
+                try {
+                    val created = scope.get<AndroidTrackerRuntime>()
+                    koinScope = scope
+                    created
+                } catch (error: Exception) {
+                    scope.close()
+                    throw error
+                }
+            } catch (error: Exception) {
+                report("Unable to initialize the Android tracker runtime", error)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                null
+            }
+        }
         val provider = application as? AndroidTrackerProvider
         if (provider == null) {
             report("Host Application must implement AndroidTrackerProvider")
@@ -284,6 +325,18 @@ class TrackerForegroundService : Service() {
             stopSelf()
             null
         }
+    }
+
+    private fun closeRuntimeScope() {
+        val scope = koinScope
+        koinScope = null
+        scope?.close()
+    }
+
+    private fun sessionStoreFromKoinOrNew(): SessionStore {
+        val koin = KoinPlatform.getKoinOrNull()
+        if (koin != null && koin.declares(SessionStore::class)) return koin.get()
+        return EncryptedSessionStore(applicationContext, Dispatchers.IO)
     }
 
     private fun observeState(activeRuntime: AndroidTrackerRuntime) {
@@ -302,7 +355,7 @@ class TrackerForegroundService : Service() {
         val active = runtime
         var failure: String? = null
         try {
-            (active?.sessions ?: EncryptedSessionStore(this)).clear()
+            (active?.sessions ?: sessionStoreFromKoinOrNew()).clear()
         } catch (error: Exception) {
             failure = "Tracking stopped but the encrypted session could not be cleared"
             _trackingState.value = TrackerState(error = failure)
@@ -318,6 +371,7 @@ class TrackerForegroundService : Service() {
                 try {
                     active?.shutdown()
                 } finally {
+                    closeRuntimeScope()
                     stopping = false
                 }
             }
@@ -329,6 +383,7 @@ class TrackerForegroundService : Service() {
         stateJob?.cancel()
         runtime?.close()
         runtime = null
+        closeRuntimeScope()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -432,7 +487,9 @@ object AndroidTracker {
 
     suspend fun stopFromHost(context: Context) {
         try {
-            EncryptedSessionStore(context).clear()
+            val koin = KoinPlatform.getKoinOrNull()
+            if (koin != null && koin.declares(SessionStore::class)) koin.get<SessionStore>().clear()
+            else EncryptedSessionStore(context.applicationContext, Dispatchers.IO).clear()
         } finally {
             context.stopService(Intent(context, TrackerForegroundService::class.java))
         }

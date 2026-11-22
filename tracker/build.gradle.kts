@@ -49,18 +49,21 @@ kotlin {
     }
     sourceSets {
         commonMain.dependencies {
-            api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
-            api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+            api(libs.kotlinx.coroutines.core)
+            api(libs.kotlinx.serialization.json)
+            api(libs.koin.core)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
-            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+            implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.koin.test)
         }
         androidMain.dependencies {
-            implementation("androidx.core:core-ktx:1.19.1")
-            implementation("com.google.android.gms:play-services-location:21.3.0")
-            implementation("net.zetetic:sqlcipher-android:4.20.0")
-            implementation("androidx.sqlite:sqlite:2.6.2")
+            implementation(libs.androidx.core.ktx)
+            implementation(libs.play.services.location)
+            implementation(libs.sqlcipher.android)
+            implementation(libs.androidx.sqlite)
+            implementation(libs.koin.android)
         }
     }
 }

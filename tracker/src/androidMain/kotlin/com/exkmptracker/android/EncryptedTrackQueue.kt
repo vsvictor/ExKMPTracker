@@ -9,7 +9,7 @@ import android.database.sqlite.SQLiteDatabase as LegacyDatabase
 import com.exkmptracker.model.TrackPoint
 import com.exkmptracker.model.TrackingIdentity
 import com.exkmptracker.ports.TrackQueue
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -25,13 +25,16 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 
 /** SQLite FIFO whose payload and identity partition key are both protected at rest. */
-class EncryptedTrackQueue(context: Context) : TrackQueue, Closeable {
+class EncryptedTrackQueue(
+    context: Context,
+    private val io: CoroutineDispatcher,
+) : TrackQueue, Closeable {
     private val helper = QueueDatabase(context.applicationContext)
     private val json = Json
     private val persistenceMutex = Mutex()
 
     override suspend fun append(identity: TrackingIdentity, point: TrackPoint) = persistenceMutex.withLock {
-        withContext(Dispatchers.IO) {
+        withContext(io) {
         val partition = partition(identity)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, AndroidKeystoreKeys.queueEncryptionKey { helper.readableDatabase.rawQuery("SELECT 1 FROM points LIMIT 1", emptyArray<String>()).use { it.moveToFirst() } })
@@ -56,7 +59,7 @@ class EncryptedTrackQueue(context: Context) : TrackQueue, Closeable {
     }
 
     override suspend fun peek(identity: TrackingIdentity, limit: Int): List<TrackPoint> = persistenceMutex.withLock {
-        withContext(Dispatchers.IO) {
+        withContext(io) {
         require(limit >= 0) { "limit must not be negative" }
         if (limit == 0) return@withContext emptyList()
         val partition = partition(identity)
@@ -73,7 +76,7 @@ class EncryptedTrackQueue(context: Context) : TrackQueue, Closeable {
     }
 
     override suspend fun acknowledge(identity: TrackingIdentity, ids: List<String>) = persistenceMutex.withLock {
-        withContext(Dispatchers.IO) {
+        withContext(io) {
         if (ids.isEmpty()) return@withContext
         require(ids.distinct().size == ids.size) { "Acknowledgement contains duplicate point IDs" }
         val db = helper.writableDatabase
@@ -105,7 +108,7 @@ class EncryptedTrackQueue(context: Context) : TrackQueue, Closeable {
     }
 
     override suspend fun size(identity: TrackingIdentity): Long = persistenceMutex.withLock {
-        withContext(Dispatchers.IO) {
+        withContext(io) {
             helper.readableDatabase.rawQuery("SELECT COUNT(*) FROM points WHERE partition_key=?", arrayOf(partition(identity))).use {
                 check(it.moveToFirst()) { "Queue count query returned no result" }
                 it.getLong(0)

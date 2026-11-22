@@ -50,11 +50,12 @@ internal fun androidLocationRequestSpec(stationary: Boolean) = AndroidLocationRe
  * the callback, so the stream does not go silent and the 15-second estimate horizon
  * does not clear the map pin.
  */
-class AndroidLocationSource(
+class AndroidLocationSource internal constructor(
     context: Context,
-    private val dispatch: (TrackerEvent) -> Unit,
-    private val report: (String, Throwable?) -> Unit,
+    events: TrackerEventBus,
 ) : Closeable {
+    private val dispatch: (TrackerEvent) -> Unit = events::dispatch
+    private val report: (String, Throwable?) -> Unit = events::report
     private val appContext = context.applicationContext
     private val locationManager = appContext.getSystemService(LocationManager::class.java)
     private val fused by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {

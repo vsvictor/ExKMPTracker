@@ -15,10 +15,11 @@ import java.io.Closeable
 import java.util.UUID
 
 /** Activity recognition is advisory and optional; failures are reported without stopping tracking. */
-class AndroidActivityRecognition(
+class AndroidActivityRecognition internal constructor(
     context: Context,
-    private val report: (String, Throwable?) -> Unit,
+    events: TrackerEventBus,
 ) : Closeable {
+    private val report: (String, Throwable?) -> Unit = events::report
     private val appContext = context.applicationContext
     private val client by lazy { ActivityRecognition.getClient(appContext) }
     internal val deliveryToken: Uri = Uri.parse("exkmptracker://activity/${UUID.randomUUID()}")

@@ -29,16 +29,19 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":tracker"))
-            api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
-            api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+            api(libs.kotlinx.coroutines.core)
+            api(libs.kotlinx.serialization.json)
+            api(libs.koin.core)
         }
         androidMain.dependencies {
-            api("com.google.ai.edge.litert:litert:1.4.1")
-            api("com.google.ai.edge.litert:litert-gpu:1.4.1")
-            api("com.google.ai.edge.litert:litert-gpu-api:1.4.1")
+            api(libs.litert)
+            api(libs.litert.gpu)
+            api(libs.litert.gpu.api)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
+            implementation(libs.kotlinx.coroutines.test)
+            implementation(libs.koin.test)
         }
     }
 }

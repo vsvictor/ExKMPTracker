@@ -13,8 +13,8 @@ import com.exkmptracker.ports.TrackerClock
 import com.exkmptracker.ports.TrackerLogger
 import com.exkmptracker.ports.TrackingTransport
 import com.exkmptracker.cooperative.*
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.koin.core.scope.Scope as KoinScope
 
 /**
  * iOS-owned lifecycle around the shared tracker. There is deliberately no singleton:
@@ -43,15 +44,16 @@ class IosTrackerRuntime(
     logger: TrackerLogger = IosTrackerLogger(),
     private val config: TrackerConfig = TrackerConfig(),
     mapMatcher: MapMatcher? = null,
-    storage: IosProtectedStorage = IosProtectedStorage(),
-    private val queue: TrackQueue = IosTrackQueue(storage),
-    sessionStore: SessionStore = IosSessionStore(storage),
+    storage: IosProtectedStorage = iosStorageFromGraphOrNew(),
+    private val queue: TrackQueue = iosQueueFor(storage),
+    sessionStore: SessionStore = iosSessionFor(storage),
     clock: TrackerClock = IosTrackerClock(),
     idGenerator: PointIdGenerator = IosPointIdGenerator(),
     vision: EdgeVisionController? = null,
     vehicleClass: VehicleClass = VehicleClass.CAR,
 ) {
     private val trackerLogger = logger
+    private val mainDispatcher: CoroutineDispatcher = iosMainDispatcher()
     private val sessions = sessionStore
     private val clockSource = clock
     private val lifecycle = Mutex()
@@ -79,6 +81,7 @@ class IosTrackerRuntime(
     private var closed = false
     private var acceptingLocationEvents = false
     private var ownsScope = false
+    private var boundKoinScope: KoinScope? = null
 
     /**
      * Exact one-argument Swift initializer (`IosTrackerRuntime(transport:)`). It creates an
@@ -88,11 +91,11 @@ class IosTrackerRuntime(
         transport = transport,
         config = TrackerConfig(),
         logger = IosTrackerLogger(),
-        storage = IosProtectedStorage(),
+        storage = iosStorageFromGraphOrNew(),
     )
 
     constructor(transport: TrackingTransport, vision: EdgeVisionController, vehicleClass: VehicleClass) : this(
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        scope = CoroutineScope(SupervisorJob() + iosComputeDispatcher()),
         transport = transport,
         vision = vision,
         vehicleClass = vehicleClass,
@@ -104,8 +107,10 @@ class IosTrackerRuntime(
     suspend fun section(number: Int, enabled: Boolean) = bloc.section(number, enabled)
 
     /**
-     * Explicit Swift initializer with an instance-owned scope. Pass one [IosProtectedStorage]
-     * per storage directory and process; it is shared by the queue and session store here.
+     * Explicit Swift initializer with an instance-owned scope. A new [IosProtectedStorage] whose
+     * directory standardizes to the Koin queue directory reuses that queue and session store.
+     * A different directory keeps its own. The scope uses the Koin compute dispatcher when the
+     * graph has one.
      */
     constructor(
         transport: TrackingTransport,
@@ -113,18 +118,51 @@ class IosTrackerRuntime(
         logger: TrackerLogger,
         storage: IosProtectedStorage,
     ) : this(
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        scope = CoroutineScope(SupervisorJob() + iosComputeDispatcher()),
         transport = transport,
         logger = logger,
         config = config,
         mapMatcher = null,
         storage = storage,
-        queue = IosTrackQueue(storage),
-        sessionStore = IosSessionStore(storage),
+        queue = iosQueueFor(storage),
+        sessionStore = iosSessionFor(storage),
         clock = IosTrackerClock(),
         idGenerator = IosPointIdGenerator(),
     ) {
         ownsScope = true
+    }
+
+    /** Graph-built runtime. `internal` keeps this initializer out of the Swift header. */
+    internal constructor(
+        scope: CoroutineScope,
+        transport: TrackingTransport,
+        logger: TrackerLogger,
+        config: TrackerConfig,
+        mapMatcher: MapMatcher?,
+        storage: IosProtectedStorage,
+        queue: TrackQueue,
+        sessionStore: SessionStore,
+        clock: TrackerClock,
+        idGenerator: PointIdGenerator,
+        vision: EdgeVisionController?,
+        vehicleClass: VehicleClass,
+        koinScope: KoinScope,
+    ) : this(
+        scope = scope,
+        transport = transport,
+        logger = logger,
+        config = config,
+        mapMatcher = mapMatcher,
+        storage = storage,
+        queue = queue,
+        sessionStore = sessionStore,
+        clock = clock,
+        idGenerator = idGenerator,
+        vision = vision,
+        vehicleClass = vehicleClass,
+    ) {
+        ownsScope = true
+        boundKoinScope = koinScope
     }
 
     init {
@@ -212,7 +250,7 @@ class IosTrackerRuntime(
         }
 
         queue.size(session.identity)
-        val source = withContext(Dispatchers.Main) {
+        val source = withContext(mainDispatcher) {
             val existing = locationSource ?: IosLocationSource(
                 clock = clockSource,
                 config = config,
@@ -225,7 +263,7 @@ class IosTrackerRuntime(
         try {
             sessions.save(session)
         } catch (error: Throwable) {
-            withContext(Dispatchers.Main + NonCancellable) {
+            withContext(mainDispatcher + NonCancellable) {
                 source.stop()
                 locationSource = null
             }
@@ -236,7 +274,7 @@ class IosTrackerRuntime(
         bloc.dispatch(TrackerEvent.Start(session))
         activeSession = session
         activeBackgroundConfiguration = backgroundLocationConfigured
-        withContext(Dispatchers.Main) {
+        withContext(mainDispatcher) {
             acceptingLocationEvents = true
             sensorController.startTrackingOnMain()
         }
@@ -258,7 +296,7 @@ class IosTrackerRuntime(
         if (backgroundLocationConfigured != activeBackgroundConfiguration) {
             // Re-applies authorization/background configuration on the running manager; updates
             // are not stopped, so no sensor restart or data gap is introduced.
-            withContext(Dispatchers.Main) { locationSource?.start(backgroundLocationConfigured) }
+            withContext(mainDispatcher) { locationSource?.start(backgroundLocationConfigured) }
             activeBackgroundConfiguration = backgroundLocationConfigured
         }
     }
@@ -285,7 +323,7 @@ class IosTrackerRuntime(
             timerJob = null
         }
         try {
-            withContext(Dispatchers.Main + NonCancellable) {
+            withContext(mainDispatcher + NonCancellable) {
                 acceptingLocationEvents = false
                 try {
                     locationSource?.stop()
@@ -345,6 +383,9 @@ class IosTrackerRuntime(
                         withContext(NonCancellable) { bloc.shutdown() }
                     } finally {
                         if (ownsScope) scope.cancel()
+                        val bound = boundKoinScope
+                        boundKoinScope = null
+                        bound?.close()
                     }
                 }
             }

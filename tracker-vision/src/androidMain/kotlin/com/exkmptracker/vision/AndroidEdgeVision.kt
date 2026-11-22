@@ -72,7 +72,7 @@ private fun openEdgeVision(
     },
 )
 
-private fun openBackendOrCpu(file: File, optionsFactory: () -> AndroidVisionOptions): YoloBackend =
+internal fun openBackendOrCpu(file: File, optionsFactory: () -> AndroidVisionOptions): YoloBackend =
     try {
         openBackend(file, optionsFactory)
     } catch (acceleratorFailure: Throwable) {

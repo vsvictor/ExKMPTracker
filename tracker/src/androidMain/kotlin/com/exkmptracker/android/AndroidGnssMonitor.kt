@@ -17,11 +17,12 @@ import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Optional raw GNSS evidence; UTC is emitted only when the receiver exposes a leap-second count. */
-class AndroidGnssMonitor(
+class AndroidGnssMonitor internal constructor(
     context: Context,
-    private val dispatch: (TrackerEvent) -> Unit,
-    private val report: (String, Throwable?) -> Unit,
+    events: TrackerEventBus,
 ) : Closeable {
+    private val dispatch: (TrackerEvent) -> Unit = events::dispatch
+    private val report: (String, Throwable?) -> Unit = events::report
     private val appContext = context.applicationContext
     private val locationManager = appContext.getSystemService(LocationManager::class.java)
     private val thread = HandlerThread("exkmp-tracker-gnss").apply { start() }

@@ -4,7 +4,7 @@ import android.content.Context
 import android.util.AtomicFile
 import com.exkmptracker.model.TrackingSession
 import com.exkmptracker.ports.SessionStore
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -16,11 +16,14 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 
 /** Authenticated, atomic session persistence. Corrupt or undecryptable state is never discarded. */
-class EncryptedSessionStore(context: Context) : SessionStore {
+class EncryptedSessionStore(
+    context: Context,
+    private val io: CoroutineDispatcher,
+) : SessionStore {
     private val file = AtomicFile(File(context.noBackupFilesDir, "tracker-session-v1.bin"))
     private val json = Json
 
-    override suspend fun load(): TrackingSession? = withContext(Dispatchers.IO) {
+    override suspend fun load(): TrackingSession? = withContext(io) {
         val bytes = try {
             file.openRead().use { it.readBytes() }
         } catch (_: FileNotFoundException) {
@@ -38,7 +41,7 @@ class EncryptedSessionStore(context: Context) : SessionStore {
         }
     }
 
-    override suspend fun save(session: TrackingSession) = withContext(Dispatchers.IO) {
+    override suspend fun save(session: TrackingSession) = withContext(io) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, AndroidKeystoreKeys.encryptionKey())
         val nonce = cipher.iv
@@ -58,7 +61,7 @@ class EncryptedSessionStore(context: Context) : SessionStore {
         }
     }
 
-    override suspend fun clear() = withContext(Dispatchers.IO) {
+    override suspend fun clear() = withContext(io) {
         try {
             file.delete()
             val base = file.baseFile

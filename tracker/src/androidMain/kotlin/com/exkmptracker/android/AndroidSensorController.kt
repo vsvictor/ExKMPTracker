@@ -23,11 +23,12 @@ import kotlin.math.sqrt
 import kotlin.math.sin
 
 /** Sensor fusion maps acceleration through the device attitude into earth coordinates. */
-class AndroidSensorController(
+class AndroidSensorController internal constructor(
     context: Context,
-    private val dispatch: (TrackerEvent) -> Unit,
-    private val report: (String, Throwable?) -> Unit,
+    events: TrackerEventBus,
 ) : SensorController, Closeable {
+    private val dispatch: (TrackerEvent) -> Unit = events::dispatch
+    private val report: (String, Throwable?) -> Unit = events::report
     private val manager = context.applicationContext.getSystemService(SensorManager::class.java)
     private val thread = HandlerThread("exkmp-tracker-motion").apply { start() }
     private val handler = Handler(thread.looper)
