@@ -79,21 +79,28 @@ No road graph or RTK correction service is bundled.
 ## Stationary behaviour
 
 A confirmed stop repeats a fixed anchor at zero speed. Quiet IMU plus reported
-GNSS speed < 0.5 m/s enters a hold. After a precise fix faster than 0.5 m/s,
-one later slow sample does not: two consecutive slow precise fixes are required.
-Speed > 1 m/s or a displacement > `max(20 m, 2.5 × accuracy)` exits the hold.
-Network fixes cannot release a stop. Transient jolts cannot release the hold.
+GNSS speed < 0.5 m/s enters a hold. A precise fix that stays inside 25 m for 15 s
+also enters it, even when Doppler still reports a crawl, so parked wander is not
+travel. After a precise fix faster than 0.5 m/s, one later slow sample does not:
+two consecutive slow precise fixes are required. Two consecutive non-network
+fixes that are both faster than 1 m/s and farther than `max(20 m, 2.5 × accuracy)`
+exit the hold. A speed spike or a single position jump does not. Network fixes
+cannot release a stop. Transient jolts cannot release the hold.
 Five seconds of continuous IMU motion can release it only without a precise fix
 during those five seconds.
 
-The anchor can be replaced once from network to GNSS and refined once after
-≥ 10 precise fixes using inverse-variance weights, a 2× improvement requirement
-and a best-single-fix/4 accuracy floor. Stationary uncertainty grows 0.1 m/s
+The anchor coordinate is fixed after a precise hold begins. It is replaced once
+from network to GNSS, and that first precise fix is the accurate position; later
+fixes do not move the pin or add a segment. Oscillating GNSS noise is published
+at the coordinate where that blob started. The filter still accepts every fix,
+and a straight crawl or a real turn is not pinned, so slow travel keeps the
+filter's accuracy. Stationary uncertainty grows 0.1 m/s
 only after the last precise fix, and the added growth is capped at 15 m. A fresh
 precise fix does not inflate the held circle. The published time still advances
 so the map pin does not expire, but that time is not a new measurement. On Android, activity-based STILL pauses
 precise sensors and raw GNSS, and slows location to a 5-second precise watchdog
-instead of stopping it. iOS retains continuous Core Location: motion callbacks
+instead of stopping it. The interval change does not remove the location callback,
+and the first fused result is not withheld until a precise solution. iOS retains continuous Core Location: motion callbacks
 alone cannot reliably wake a suspended app. Fixes received during STILL still
 update the filter. The published position stays on the anchor until the hold
 releases, and a release leaves STILL so the fast location stream resumes.
@@ -120,7 +127,10 @@ At about 2 m/s and below they widen to 100 m / 30° / 120 s. At 20 m/s and above
 they tighten to 10 m / 6° / 12 s. A start from under 1 m/s to at least 2 m/s,
 a speed change of at least 5 m/s, a turn, a return from network/dead reckoning/
 stationary to GPS or fused, the first stationary point, and a 40 m accuracy
-worsening or a recovery to ≤ 25 m also record immediately. Ingest follows the
+worsening or a recovery to ≤ 25 m also record immediately. A step under 30 m
+while both speeds stay under 3 m/s does not record. Reported speed that the
+ground track does not support does not record either. Repeating a stationary
+anchor does not record again, even when the copies differ. Ingest follows the
 same scale: 30 s while slow, 10 s at 8 m/s, and 5 s at highway speed. The server
 stores every accepted point and does not choose this cadence.
 The throttle commits only after durable append succeeds. Prediction/stationary

@@ -1,4 +1,4 @@
-# ExKMPTracker 1.1.2
+# ExKMPTracker 1.1.5
 
 [English](README.md)
 
@@ -72,7 +72,7 @@ JSON-RPC-2-Client-KMP хоста. Ядро не відкриває мереже�
 includeBuild("/Users/victor/ExKMPTracker")
 ```
 
-Потім — `implementation("com.exkmptracker:tracker:1.1.2")` у потрібному
+Потім — `implementation("com.exkmptracker:tracker:1.1.5")` у потрібному
 KMP source set або Android-модулі. Версії Kotlin/AGP мають бути сумісні
 з цією збіркою. Для Swift зберіть і підключіть XCFramework за інструкцією iOS.
 
