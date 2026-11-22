@@ -2,6 +2,16 @@
 
 [Українською](changelog.uk.md) | **English**
 
+## 1.1.6
+
+A coarse fix that is too inaccurate to publish still anchors the next jump check.
+GNSS/fused samples coarser than 65 m and network samples coarser than 150 m stay
+unpublished. Displacement from that anchor uses `(distance − accuracy − 100 m) / Δt`
+and is rejected immediately when it exceeds 220 km/h, including one second later.
+A coarse sample that is itself a teleport does not replace the anchor. The 15 s
+gap rule still applies to the last accepted fix. The 25 m precise-fix rule, the
+held stop, and the 40 m reinitialization cluster are unchanged.
+
 ## 1.1.5
 
 Parked drift of the published coordinate is zero, and the moving solution is unchanged.

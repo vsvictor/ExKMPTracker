@@ -2,7 +2,7 @@
 
 [Українською](tracking.uk.md) | **English**
 
-This document describes the ExKMPTracker 1.1.5 positioning pipeline: sources,
+This document describes the ExKMPTracker 1.1.6 positioning pipeline: sources,
 estimation, predictions, and the path of a point from a native event to server
 acknowledgement. It is a Kotlin Multiplatform implementation, not a Flutter wrapper.
 The short contract is in [algorithm.md](algorithm.md).
@@ -104,8 +104,11 @@ Every incoming position passes, in order:
 6. **Anti-fake checks** (when `antiFake` is on):
    - mock locations are rejected;
    - speed above 220 km/h is rejected;
-   - after a signal gap longer than 15 s, the implied speed between the last fix and the new
-     one — `(distance − accuracy − 100 m) / Δt` — must not exceed 220 km/h (the teleport check).
+   - implied speed `(distance − accuracy − 100 m) / Δt` must not exceed 220 km/h.
+     Against the last accepted fix this applies after a gap longer than 15 s.
+     A GNSS/fused sample coarser than 65 m, or a network sample coarser than 150 m,
+     is not published, but it remains a jump anchor. Displacement from that anchor
+     is tested immediately, so the next precise fix cannot teleport away from it.
 7. **Time monotonicity** — a fix with `monotonicSeconds ≤` the filter's last update time is
    rejected as stale.
 8. **χ² outlier gate** — see section 4.6.
@@ -129,8 +132,9 @@ Geodetic conversion uses a spherical Earth, `R = 6 371 000 m`:
 E = Δλ · R · cos(φ₀)      N = Δφ · R
 ```
 
-If more than 15 s pass without a fix, the next accepted fix reinitializes the filter. It
-still has to pass the teleport check against the last fix.
+If more than 15 s pass without an accepted fix, the next accepted fix reinitializes the filter.
+It still has to pass the teleport check against the last accepted fix, or against a coarse
+sample kept only as a jump anchor.
 
 ### 4.2 Accuracy and variance
 

@@ -63,7 +63,9 @@ The four-state EKF uses east/north metres, speed and clockwise heading:
   rather than double-counting fresh GNSS displacement. Step events need a
   monotonic observation timestamp no older than 2 seconds; suspended backlogs
   must not be relabelled as fresh steps.
-- Mock fixes and speed/long-gap teleportation > 220 km/h are rejected by default.
+- Mock fixes, reported speed above 220 km/h, and a position jump faster than 220 km/h
+  are rejected by default. The jump check runs after a gap of more than 15 s, and
+  immediately against a coarse fix that was too inaccurate to enter the filter.
   AGC/CN0 and clock checks are heuristics, not proof of authenticity.
   Radio jumps set `SUSPECTED_INTERFERENCE` and `SUSPECTED_SPOOFING`; the earlier
   camel-case flag aliases remain present for compatibility.
