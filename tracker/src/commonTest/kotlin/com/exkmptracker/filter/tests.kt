@@ -148,6 +148,34 @@ class TrackingFilterTests {
         assertNotNull(TrackingFilter(TrackerConfig(antiFake = false)).fix(fix(mock = true)))
     }
 
+    @Test fun unpublishedCoarseFixRejectsAnImmediateTeleport() {
+        val filter = TrackingFilter()
+        assertNull(filter.fix(fix(time = 1.0, accuracy = 100.0)))
+        assertContains(assertNotNull(filter.rejection), "Accuracy exceeds")
+        assertNull(filter.fix(fix(time = 2.0, lat = 51.0, accuracy = 12.0, speed = 55.0)))
+        assertContains(assertNotNull(filter.rejection), "Implausible position jump")
+        assertNull(filter.fix(fix(time = 3.0, lat = 51.0005, accuracy = 12.0, speed = 55.0)))
+        val kept = assertNotNull(filter.fix(fix(time = 4.0, lat = 50.0001, accuracy = 12.0, speed = 0.0)))
+        assertEquals(50.0001, kept.latitude, 1e-6)
+    }
+
+    @Test fun coarseFixStillAllowsAPlausibleNextPreciseFix() {
+        val filter = TrackingFilter()
+        assertNull(filter.fix(fix(time = 1.0, accuracy = 100.0, source = LocationSource.fused)))
+        val next = assertNotNull(filter.fix(fix(time = 10.0, lat = 50.001, accuracy = 12.0, source = LocationSource.fused)))
+        assertEquals(50.001, next.latitude, 1e-6)
+    }
+
+    @Test fun coarseTeleportDoesNotReplaceTheJumpAnchor() {
+        val filter = TrackingFilter()
+        assertNotNull(filter.fix(fix(time = 1.0, accuracy = 8.0)))
+        assertNull(filter.fix(fix(time = 2.0, lat = 51.0, accuracy = 100.0)))
+        assertNull(filter.fix(fix(time = 20.0, lat = 51.0, accuracy = 12.0, speed = 55.0)))
+        assertContains(assertNotNull(filter.rejection), "Implausible position jump")
+        val kept = assertNotNull(filter.fix(fix(time = 21.0, accuracy = 8.0)))
+        assertEquals(50.0, kept.latitude, 1e-4)
+    }
+
     @Test fun outlierDoesNotMutateFilter() {
         val filter = TrackingFilter()
         filter.fix(fix())
