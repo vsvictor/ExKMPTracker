@@ -205,8 +205,9 @@ its own product policy permits restoration.
   monitoring could at most aid coarse recovery and is not a replacement for that wake check.
   Device/simulator availability and permission can vary; unavailable sensors are exposed by
   `sensorCapabilities` and reported as `PlatformError`.
-- iOS does not expose raw GNSS receiver clock measurements or AGC. The runtime emits no
-  fabricated `Gnss` evidence. iOS also does not expose total network traffic for the app UID;
+- iOS does not expose raw GNSS receiver clock measurements, AGC, or the C/N0 of
+  satellites used in the fix. Android can widen a weak fix from that C/N0; iOS cannot,
+  and the runtime emits no fabricated `Gnss` evidence. iOS also does not expose total network traffic for the app UID;
   `IosTrafficCounter` throws `UnsupportedOperationException` rather than returning invented
   zeroes.
 - `TrackerClock` monotonic time is Darwin `clock_gettime(CLOCK_MONOTONIC_RAW)`, which keeps

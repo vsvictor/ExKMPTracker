@@ -54,6 +54,9 @@ class TrackerBloc(
     private var throttle = TrackThrottle(config)
     private var guard = TimeGuard()
     private var stop = StopAnchor()
+    private var park = ParkedMotion()
+    /** Published coordinate at the start of a parked blob. Noise must not move it. */
+    private var parkHold: TrackEstimate? = null
     private var lastRaw: LocationFix? = null
     private var lastRecorded: TrackEstimate? = null
     private var lastPreciseTime = Double.NEGATIVE_INFINITY
@@ -182,6 +185,7 @@ class TrackerBloc(
             lastFlush = Double.NEGATIVE_INFINITY
             filter = TrackingFilter(config)
             stop = StopAnchor()
+            clearPark()
             throttle = TrackThrottle(config)
             pendingStill = false
             quietSamples = 0
@@ -388,6 +392,7 @@ class TrackerBloc(
             throttle = TrackThrottle(config)
             guard = TimeGuard()
             stop = StopAnchor()
+            clearPark()
             lastRaw = null
             lastRecorded = null
             lastPreciseTime = Double.NEGATIVE_INFINITY
@@ -430,7 +435,8 @@ class TrackerBloc(
         }
         if (fix.source != LocationSource.network && guard.suspect(now)) return reject("GNSS time disagrees with server")
         val controls = controls(now)
-        val estimate = filter.fix(fix, controls.first, controls.second, state.value.activity == Activity.IN_VEHICLE)
+        val estimate = filter.fix(fix, controls.first, controls.second, state.value.activity == Activity.IN_VEHICLE,
+            guard.strongCn0(fix.monotonicSeconds))
             ?: return reject(filter.rejection ?: "Rejected fix")
         lastRaw = fix
         if (fix.isPreciseFix()) {
@@ -441,16 +447,34 @@ class TrackerBloc(
         if (state.value.activity == Activity.WALKING && fix.speedMps > 0.7 && fix.bearingDegrees >= 0) {
             freshCompass(now)?.let { compassOffset = wrapRadians((fix.bearingDegrees - it) * RADIANS) / RADIANS }
         }
-        if (stop.shouldRelease(fix)) stop = StopAnchor()
+        if (stop.shouldRelease(fix)) {
+            stop = StopAnchor()
+            clearPark()
+        }
         if (!stop.active && quietMotion(now) && fix.speedMps in 0.0..<0.5 &&
             fix.source != LocationSource.network && slowSpeedConfirmed() && !pressureVeto(now)) {
             filter.stationary()
-            stop.begin(estimate)
+            stop.begin(parkHold ?: estimate)
+            clearPark()
+        }
+        if (!stop.active) {
+            val hadSamples = park.hasSamples()
+            val confirmed = park.observe(fix)
+            if (!hadSamples && park.hasSamples()) parkHold = estimate.copy(speedMps = 0.0)
+            if (confirmed) {
+                filter.stationary()
+                val origin = parkHold ?: estimate
+                clearPark()
+                stop.begin(origin.copy(monotonicSeconds = estimate.monotonicSeconds))
+            } else if (!park.hasSamples()) {
+                parkHold = null
+            }
         }
         if (state.value.activity == Activity.STILL && !stop.active) {
             sensors.setStationary(false)
             mutableState.value = state.value.copy(activity = Activity.UNKNOWN)
         }
+        val pinned = if (!stop.active) parkHold?.takeIf { park.pinned() } else null
         if (stop.active) {
             stop.driftMeters(fix)?.let { drift ->
                 val old = state.value
@@ -463,7 +487,7 @@ class TrackerBloc(
             stop.add(fix)
             record(heldEstimate(now) ?: estimate, null)
         } else {
-            record(estimate, fix)
+            record(pinned?.copy(monotonicSeconds = estimate.monotonicSeconds) ?: estimate, fix)
         }
         if (pendingStill) {
             pendingStill = false
@@ -580,7 +604,15 @@ class TrackerBloc(
         }
         val moving = movingSince
         if (stop.active && moving != null && sample.monotonicSeconds - moving >= 5.0 &&
-            sample.monotonicSeconds - lastPreciseTime > 5.0) stop = StopAnchor()
+            sample.monotonicSeconds - lastPreciseTime > 5.0) {
+            stop = StopAnchor()
+            clearPark()
+        }
+    }
+
+    private fun clearPark() {
+        park = ParkedMotion()
+        parkHold = null
     }
 
     private fun activity(value: Activity) {

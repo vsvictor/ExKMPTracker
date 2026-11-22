@@ -2,6 +2,65 @@
 
 [Українською](changelog.uk.md) | **English**
 
+## 1.1.6
+
+A coarse fix that is too inaccurate to publish still anchors the next jump check.
+GNSS/fused samples coarser than 65 m and network samples coarser than 150 m stay
+unpublished. Displacement from that anchor uses `(distance − accuracy − 100 m) / Δt`
+and is rejected immediately when it exceeds 220 km/h, including one second later.
+A coarse sample that is itself a teleport does not replace the anchor. The 15 s
+gap rule still applies to the last accepted fix. The 25 m precise-fix rule, the
+held stop, and the 40 m reinitialization cluster are unchanged.
+
+## 1.1.5
+
+Parked drift of the published coordinate is zero, and the moving solution is unchanged.
+Once a precise stop is held, its latitude and longitude do not move: the old
+inverse-variance refinement no longer shifts the pin or adds a segment. A network
+anchor is still replaced once by the first GNSS or fused fix, because that is the
+accurate position. GNSS noise that reverses on itself is published at the coordinate
+where the blob started, while the filter keeps every fix. Straight slow travel and a
+real turn stay on the filter, so a creep or a curve is not frozen. A later stationary
+copy is never queued. Reported speed that the ground track does not support does not
+add a segment; a same-coordinate heartbeat still can, and its length is zero. A real
+outage still clears the estimate after 15 s.
+
+## 1.1.4
+
+Parked Doppler noise and multipath no longer become mileage. A precise fix that
+stays inside 25 m for 15 s anchors the position even when the reported speed is
+a crawl. The anchor releases only after two consecutive non-network fixes that
+are each faster than 1 m/s and farther than `max(20 m, 2.5 × accuracy)`. One
+speed spike or one position jump does not release it. A step shorter than 30 m
+while both speeds stay under 3 m/s is not recorded, and the same stationary
+anchor is not written again on every tick.
+
+## 1.1.3
+
+The Android map pin could disappear, and the first fix could take a long time.
+Every fused request waited for a high-accuracy location and refused a cached fix
+(`setWaitForAccurateLocation(true)`, `setMaxUpdateAgeMillis(0)`). Entering `STILL`
+removed that request and started another one, so delivery paused. After 15 seconds
+without an accepted fix the estimate was cleared, and the map hides a null position.
+
+1.1.3 does not withhold the first fused result until a precise solution. A cached
+fix at most 5 seconds old may be delivered; an older cache is still outside the
+bloc's 10-second acceptance window. Changing the 1 s / 5 s interval replaces the
+request parameters without removing the callback, so the stream does not go silent.
+A real outage still clears the estimate after 15 seconds.
+
+## 1.1.2
+
+On Android, GNSS and fused measurement variance widens when the satellites used in
+the fix are weak. The mean C/N0 of those satellites comes from `GnssStatus`. At
+32 dB-Hz and above the provider radius is unchanged. At 20 dB-Hz and below the
+effective sigma is tripled, with a linear scale between those points. Fewer than
+four satellites used in the fix counts as the weak end. The wider variance lowers
+the Kalman gain, so a multipath-prone fix pulls the pin less. A missing report does
+not widen anything. The 25 m precise-fix rule is unchanged. Network fixes are not
+scaled by C/N0. iOS still has no raw satellite measurements, so its variance is
+unchanged.
+
 ## 1.1.1
 
 The map circle is the filter radius, not the latest `CLLocation.horizontalAccuracy`.
