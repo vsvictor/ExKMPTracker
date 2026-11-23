@@ -1,6 +1,7 @@
 package com.exkmptracker.cooperative
 
 import com.exkmptracker.filter.TrackingFilter
+import com.exkmptracker.filter.distanceMeters
 import com.exkmptracker.model.*
 import com.exkmptracker.ports.TrackingRpcTransport
 import kotlinx.coroutines.test.runTest
@@ -87,5 +88,61 @@ class CooperativeTests {
         assertEquals(1, transport.syncPeers(session, 1_100, state, listOf(observation)).size)
         unsolicited = true
         assertFailsWith<IllegalArgumentException> { transport.syncPeers(session, 1_100, state, listOf(observation)) }
+    }
+
+    @Test fun emptyObservedPeersIsAllowedAndReturnsNoDonors() = runTest {
+        val transport = RpcCooperativeTransport(object : TrackingRpcTransport {
+            override suspend fun call(method: String, params: JsonObject): JsonObject {
+                assertEquals("coop.sync_peers", method)
+                assertEquals(0, params["observedPeers"]!!.jsonArray.size)
+                return buildJsonObject {
+                    put("captureTimestampMs", 1_100)
+                    putJsonArray("matchedDonors") {}
+                }
+            }
+            override suspend fun notify(method: String, params: JsonObject) = error("Notifications are forbidden")
+        })
+        val session = TrackingSession.fromConfirmedShift("s", "d", "b")
+        val state = CooperativeState(50.0, 30.0, 10.0, 0.0, 0.0, 0.8, VehicleClass.CAR, emptyList())
+        assertTrue(transport.syncPeers(session, 1_100, state, emptyList()).isEmpty())
+    }
+
+    @Test fun cooperativeFixStaysWithinFiveMetersAndLeavesTheForkSourceUntouched() {
+        val truthLatitude = 50.0
+        val truthLongitude = 30.0
+        val baseline = TrackingFilter()
+        val autonomous = assertNotNull(baseline.fix(LocationFix(
+            truthLatitude, truthLongitude, 5.0, 1_000, 1.0, LocationSource.gps, 0.0, 0.0,
+        )))
+        val donor = MatchedDonor(
+            "v1", "opaque-peer",
+            truthLatitude + 25.0 / 6_371_000.0 * 180.0 / PI, truthLongitude,
+            3.0, 0.0, 0.0, 0.7, VehicleClass.CAR, 1_100,
+        )
+        val observation = VisualObservation("v1", VehicleClass.CAR, 25.0, 0.0, null, 1.0)
+        val branch = baseline.fork()
+        var capture = 1.1
+        lateinit var latest: TrackEstimate
+        while (true) {
+            latest = assertNotNull(branch.cooperativeFix(donor, observation, capture))
+            assertEquals(LocationSource.cooperative, latest.source)
+            assertTrue(
+                distanceMeters(truthLatitude, truthLongitude, latest.latitude, latest.longitude) <= 5.0,
+                "error ${distanceMeters(truthLatitude, truthLongitude, latest.latitude, latest.longitude)} m at $capture",
+            )
+            if (capture - autonomous.monotonicSeconds > 15.0) break
+            capture += 0.1
+        }
+        val unchanged = assertNotNull(baseline.stationary())
+        assertEquals(autonomous.latitude, unchanged.latitude, 1e-10)
+        assertEquals(autonomous.longitude, unchanged.longitude, 1e-10)
+
+        val rejected = TrackingFilter()
+        assertNotNull(rejected.fix(LocationFix(
+            truthLatitude, truthLongitude, 5.0, 1_000, 1.0, LocationSource.gps, 0.0, 0.0,
+        )))
+        assertNull(rejected.cooperativeFix(donor.copy(trustScore = 0.69), observation, 1.1))
+        assertNull(rejected.cooperativeFix(donor.copy(vehicleClass = VehicleClass.BUS), observation, 1.1))
+        assertNull(rejected.cooperativeFix(donor, observation.copy(azimuthDegrees = 180.0), 1.1))
     }
 }
