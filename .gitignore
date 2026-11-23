@@ -3,6 +3,7 @@ tools/vision/data/
 tools/vision/runs/
 tools/vision/exports/
 tools/vision/**/*.pt
+tools/vision/__pycache__/
 
 .gradle/
 .kotlin/
