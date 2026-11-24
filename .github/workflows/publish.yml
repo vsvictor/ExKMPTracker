@@ -31,6 +31,10 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Compile every target first so a failure never leaves a partially published version.
+      - name: Build all targets
+        run: ./gradlew :tracker:assemble :tracker:compileIosMainKotlinMetadata --stacktrace
+
       - name: Publish to GitHub Packages
         run: ./gradlew :tracker:publishAllPublicationsToGitHubPackagesRepository --stacktrace
         env:
