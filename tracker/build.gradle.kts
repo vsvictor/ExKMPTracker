@@ -5,6 +5,22 @@ plugins {
     kotlin("multiplatform")
     kotlin("plugin.serialization")
     id("com.android.kotlin.multiplatform.library")
+    `maven-publish`
+}
+
+publishing {
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/vsvictor/ExKMPTracker")
+            credentials {
+                username = providers.environmentVariable("GITHUB_ACTOR").orNull
+                    ?: providers.gradleProperty("gpr.user").orNull
+                password = providers.environmentVariable("GITHUB_TOKEN").orNull
+                    ?: providers.gradleProperty("gpr.key").orNull
+            }
+        }
+    }
 }
 
 val buildSqlCipher by tasks.registering(Exec::class) {
@@ -14,6 +30,9 @@ val buildSqlCipher by tasks.registering(Exec::class) {
         layout.buildDirectory.file("sqlcipher-native/iphoneos/sqlite3.h"),
         layout.buildDirectory.file("sqlcipher-native/iphonesimulator/sqlite3.h"))
     commandLine("bash", "-c", "src/nativeInterop/sqlcipher/build.sh iphoneos && src/nativeInterop/sqlcipher/build.sh iphonesimulator")
+    // The native SQLCipher build requires Xcode toolchains; skip it on Linux/Windows hosts.
+    val isMacHost = System.getProperty("os.name").startsWith("Mac", ignoreCase = true)
+    onlyIf("SQLCipher iOS build requires a macOS host") { isMacHost }
 }
 
 kotlin {
