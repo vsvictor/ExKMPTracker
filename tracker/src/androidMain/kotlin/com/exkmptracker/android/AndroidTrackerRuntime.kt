@@ -33,7 +33,7 @@ interface AndroidTrackerProvider {
     fun createMapMatcher(context: Context): MapMatcher? = null
     fun trackerConfig(context: Context): TrackerConfig = TrackerConfig()
     fun createEdgeVisionController(context: Context): EdgeVisionController? = null
-    fun vehicleClass(context: Context): VehicleClass = VehicleClass.CAR
+    fun vehicleClass(context: Context): VehicleClass? = null
 }
 
 class AndroidTrackerLogger : TrackerLogger {

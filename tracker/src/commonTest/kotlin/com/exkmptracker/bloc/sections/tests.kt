@@ -45,7 +45,11 @@ class SectionTests {
             }
         }
     }
-    private class Fixture(scope: CoroutineScope, configured: Boolean = true) {
+    private class Fixture(
+        scope: CoroutineScope,
+        configured: Boolean = true,
+        vehicleClass: VehicleClass? = VehicleClass.CAR,
+    ) {
         val clock = Clock()
         val vision = Vision()
         val peers = Peers()
@@ -69,11 +73,27 @@ class SectionTests {
             object : TrackerLogger { override fun error(message: String, cause: Throwable?) {} },
             object : PlatformSensorProvider { override fun setStationary(stationary: Boolean) {} },
             cooperativeTransport = if (configured) peers else null,
-            vision = if (configured) vision else null)
+            vision = if (configured) vision else null,
+            vehicleClass = vehicleClass)
         fun fix(latitude: Double = 50.0) = bloc.dispatch(TrackerEvent.Position(
             LocationFix(latitude, 30.0, 15.0, clock.wallTimeMs(), clock.now, LocationSource.gps, 0.0, 0.0)))
         fun frame() = vision.emit(ObservedPeers(clock.now,
             listOf(VisualObservation("v", VehicleClass.CAR, 20.0, 0.0, null, 1.0))))
+    }
+
+    @Test fun missingEgoClassIsNotPublishedAsCar() = runTest {
+        val f = Fixture(backgroundScope, vehicleClass = null)
+        f.bloc.dispatch(TrackerEvent.Start(f.session))
+        f.fix()
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+        f.bloc.section(2, true)
+        runCurrent()
+        advanceTimeBy(100)
+        runCurrent()
+        assertTrue(f.bloc.state.value.sections.stage1)
+        assertEquals(0, f.peers.calls)
+        assertEquals("Ego vehicle class is not set", f.bloc.state.value.cooperativeStatus)
     }
 
     @Test fun defaultsAndUnsupportedStageAreExplicit() = runTest {

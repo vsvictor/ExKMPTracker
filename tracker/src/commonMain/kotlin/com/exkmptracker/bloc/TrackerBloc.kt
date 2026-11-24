@@ -21,7 +21,7 @@ class TrackerBloc(
     private val mapMatcher: MapMatcher? = null,
     private val cooperativeTransport: CooperativeTransport? = null,
     private val vision: EdgeVisionController? = null,
-    private val vehicleClass: VehicleClass = VehicleClass.CAR,
+    private val vehicleClass: VehicleClass? = VehicleClass.CAR,
 ) {
     private sealed interface Message {
         data class Event(val event: TrackerEvent) : Message
@@ -285,6 +285,10 @@ class TrackerBloc(
         val snapshot = if (freshGnss) filter.fork() else cooperativeFilter?.fork() ?: filter.fork()
         val predicted = snapshot.predict(frame.captureMonotonicSeconds, controls.first, controls.second, true)
             ?: baseline?.takeIf { frame.captureMonotonicSeconds == it.monotonicSeconds } ?: return
+        val ego = vehicleClass ?: run {
+            mutableState.value = state.value.copy(cooperativeStatus = "Ego vehicle class is not set")
+            return
+        }
         val activeFlags = flags(now, baseline?.source)
         val independent = lastRaw?.let {
             it.source != LocationSource.network && !it.isMock && now - it.monotonicSeconds in 0.0..1.0
@@ -293,7 +297,7 @@ class TrackerBloc(
         val peerState = CooperativeState(predicted.latitude, predicted.longitude, predicted.accuracyMeters,
             predicted.speedMps.coerceAtLeast(0.0), predicted.bearingDegrees,
             if (independent) (1.0 - predicted.accuracyMeters / 50.0).coerceIn(0.0, 0.95) else 0.0,
-            vehicleClass, activeFlags.sorted())
+            ego, activeFlags.sorted())
         val timestamp = (reference.serverTimeMs + (frame.captureMonotonicSeconds - reference.atMonotonic) * 1000).toLong()
         val token = cooperativeGeneration
         cooperativeJob = blocScope.launch {
