@@ -25,7 +25,9 @@ MoQ offload (phase 3) is not implemented and cannot be enabled.
   stationary drift suppression and bounded, explicitly labelled dead reckoning.
 - While stationary, the held position is recorded and queued for upload every
   `stationaryIntervalSeconds` (30 seconds by default). A new accepted estimate replaces it only if its
-  smoothed accuracy improves; delivery remains subject to connectivity and batching.
+  smoothed accuracy improves. The published position approaches the best anchor at up to
+  0.2 m/s; its reported uncertainty includes the remaining distance to that anchor.
+  Departure detection remains independent. Delivery depends on connectivity and batching.
   Stationary records include the latest accepted raw fix and its original `observedAtMs`.
   The same fix may be repeated when no newer one is available; `deviceTimeMs` is the record time.
 - Durable protected offline queue, owner partitioning, 16-byte secure IDs,

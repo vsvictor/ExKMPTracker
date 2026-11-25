@@ -272,21 +272,50 @@ class TrackerBlocTests {
             LocationSource.gps, 0.0, 0.0)))
         runCurrent()
         val improved = assertNotNull(f.bloc.state.value.estimate)
-        assertTrue(improved.accuracyMeters < initial.accuracyMeters)
-        assertNotEquals(initial.latitude, improved.latitude)
+        assertEquals(initial.latitude, improved.latitude, 1e-9)
 
         f.clock.now = 31.0
         f.bloc.dispatch(TrackerEvent.Tick)
         runCurrent()
         val heartbeat = f.transport.batches.flatten().last()
         assertEquals(LocationSource.stationary, heartbeat.source)
-        assertEquals(improved.latitude, heartbeat.smoothedLatitude, 1e-9)
+        assertNotEquals(improved.latitude, heartbeat.smoothedLatitude)
         assertEquals(50.00001, heartbeat.rawLatitude)
         assertEquals(30.0, heartbeat.rawLongitude)
         assertEquals(4.0, heartbeat.rawAccuracyMeters)
         assertEquals(2000L, heartbeat.observedAtMs)
         assertEquals(31_000L, heartbeat.deviceTimeMs)
         assertEquals(0, f.queue.size(session.identity))
+    }
+
+    @Test fun stationaryUploadedCoordinatesMoveAtMostOneMeterPerFiveSeconds() = runTest {
+        val f = Fixture(backgroundScope, TrackerConfig(stationaryIntervalSeconds = 5.0))
+        f.bloc.dispatch(TrackerEvent.Start(session))
+        repeat(10) { i ->
+            f.bloc.dispatch(TrackerEvent.Motion(MotionSample(i / 10.0, 0.0, 0.0, 0.01)))
+        }
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.0, 30.0, 20.0, 1_000L, 1.0,
+            LocationSource.gps, 0.0, 0.0)))
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+        f.clock.now = 2.0
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00009, 30.0, 4.0, 2_000L, 2.0,
+            LocationSource.gps, 0.0, 0.0)))
+        runCurrent()
+        for (second in listOf(6.0, 11.0, 16.0)) {
+            f.clock.now = second
+            f.bloc.dispatch(TrackerEvent.Tick)
+            runCurrent()
+        }
+        val points = f.transport.batches.flatten().filter { it.source == LocationSource.stationary }
+        assertEquals(4, points.size)
+        val distances = points.zipWithNext { a, b ->
+            com.exkmptracker.filter.distanceMeters(a.smoothedLatitude, a.smoothedLongitude,
+                b.smoothedLatitude, b.smoothedLongitude)
+        }
+        assertTrue(distances.any { it > 0.1 })
+        assertTrue(distances.all { it <= 1.000001 })
+        assertTrue(points.drop(1).all { it.rawLatitude == 50.00009 && it.observedAtMs == 2_000L })
     }
 
     @Test fun stationaryRecordingUsesLatestAcceptedRawFixAndPreservesObservationTime() = runTest {
@@ -322,27 +351,27 @@ class TrackerBlocTests {
             assertEquals(4_500L, point.observedAtMs)
             assertTrue(point.deviceTimeMs > point.observedAtMs)
         }
+    }
 
-        @Test fun stationaryPositionEventRecordsItsRawFixWhenIntervalIsDue() = runTest {
-            val f = Fixture(backgroundScope, TrackerConfig(stationaryIntervalSeconds = 5.0))
-            f.bloc.dispatch(TrackerEvent.Start(session))
-            repeat(10) { i ->
-                f.bloc.dispatch(TrackerEvent.Motion(MotionSample(i / 10.0, 0.0, 0.0, 0.01)))
-            }
-            f.fix()
-            f.bloc.dispatch(TrackerEvent.Tick)
-            runCurrent()
-            f.clock.now = 6.0
-            f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00001, 30.0, 4.0, 5_500L, 6.0,
-                LocationSource.gps, 0.0, 0.0)))
-            f.bloc.dispatch(TrackerEvent.Tick)
-            runCurrent()
-            val point = f.transport.batches.flatten().last()
-            assertEquals(LocationSource.stationary, point.source)
-            assertEquals(50.00001, point.rawLatitude)
-            assertEquals(4.0, point.rawAccuracyMeters)
-            assertEquals(5_500L, point.observedAtMs)
+    @Test fun stationaryPositionEventRecordsItsRawFixWhenIntervalIsDue() = runTest {
+        val f = Fixture(backgroundScope, TrackerConfig(stationaryIntervalSeconds = 5.0))
+        f.bloc.dispatch(TrackerEvent.Start(session))
+        repeat(10) { i ->
+            f.bloc.dispatch(TrackerEvent.Motion(MotionSample(i / 10.0, 0.0, 0.0, 0.01)))
         }
+        f.fix()
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+        f.clock.now = 6.0
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00001, 30.0, 4.0, 5_500L, 6.0,
+            LocationSource.gps, 0.0, 0.0)))
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+        val point = f.transport.batches.flatten().last()
+        assertEquals(LocationSource.stationary, point.source)
+        assertEquals(50.00001, point.rawLatitude)
+        assertEquals(4.0, point.rawAccuracyMeters)
+        assertEquals(5_500L, point.observedAtMs)
     }
 
     @Test fun parkedColdStartDoesNotRequireMovingCourseToDetectQuietImu() = runTest {
@@ -461,8 +490,9 @@ class TrackerBlocTests {
         f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00003, 30.0, 5.0, 18_000, 18.0,
             LocationSource.gps, 1.6, 40.0)))
         runCurrent()
-        assertEquals(parkedEstimate.latitude, assertNotNull(f.bloc.state.value.estimate).latitude, 1e-9)
-        assertEquals(parkedEstimate.longitude, assertNotNull(f.bloc.state.value.estimate).longitude, 1e-9)
+        val refined = assertNotNull(f.bloc.state.value.estimate)
+        assertTrue(com.exkmptracker.filter.distanceMeters(parkedEstimate.latitude, parkedEstimate.longitude,
+            refined.latitude, refined.longitude) <= 0.200001)
         val before = f.queue.size(session.identity)
         f.clock.now = 20.0
         f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.0, 30.0, 5.0, 20_000, 20.0,

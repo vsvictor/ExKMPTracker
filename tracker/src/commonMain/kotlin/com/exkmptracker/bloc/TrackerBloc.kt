@@ -484,7 +484,7 @@ class TrackerBloc(
                         (drift - old.stationaryDriftMeanMeters) / count,
                     stationaryDriftMaxMeters = max(old.stationaryDriftMaxMeters, drift))
             }
-            stop.add(estimate)
+            stop.add(estimate, now)
             record(heldEstimate(now) ?: estimate, fix)
         } else {
             record(pinned?.copy(monotonicSeconds = estimate.monotonicSeconds) ?: estimate, fix)

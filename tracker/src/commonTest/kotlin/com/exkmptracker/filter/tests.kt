@@ -423,7 +423,7 @@ class StopAnchorTests {
         assertTrue(later.accuracyMeters < assertNotNull(stop.estimate(61.0)).accuracyMeters)
     }
 
-    @Test fun anchorUpdatesOnlyForMoreAccurateSmoothedEstimates() {
+    @Test fun anchorMovesGraduallyOnlyTowardMoreAccurateSmoothedEstimates() {
         val stop = StopAnchor()
         stop.begin(estimate())
         stop.add(estimate().copy(latitude = 50.0001, accuracyMeters = 9.0, monotonicSeconds = 2.0))
@@ -431,10 +431,30 @@ class StopAnchorTests {
         assertEquals(50.0, assertNotNull(stop.estimate(3.0, 3.0)).latitude)
         stop.add(estimate().copy(latitude = 50.0003, accuracyMeters = 5.0, monotonicSeconds = 4.0))
         val improved = assertNotNull(stop.estimate(4.0, 4.0))
-        assertEquals(50.0003, improved.latitude)
-        assertEquals(5.0, improved.accuracyMeters)
+        assertEquals(50.0, improved.latitude, 1e-9)
+        val targetDistance = distanceMeters(50.0, 30.0, 50.0003, 30.0)
+        assertEquals(5.0 + targetDistance, improved.accuracyMeters, 1e-6)
         stop.add(estimate().copy(latitude = 50.0004, accuracyMeters = 6.0, monotonicSeconds = 5.0))
-        assertEquals(improved.latitude, assertNotNull(stop.estimate(5.0, 5.0)).latitude)
+        val later = assertNotNull(stop.estimate(9.0, 9.0))
+        assertEquals(1.0, distanceMeters(improved.latitude, improved.longitude, later.latitude, later.longitude), 1e-6)
+        assertEquals(5.0 + targetDistance - 1.0, later.accuracyMeters, 1e-6)
+        val arrived = assertNotNull(stop.estimate(204.0, 204.0))
+        assertEquals(50.0003, arrived.latitude, 1e-9)
+        assertEquals(5.0, arrived.accuracyMeters, 1e-8)
+    }
+
+    @Test fun improvedTargetDuringTransitionHasNoJumpAndFollowsShortestDatelinePath() {
+        val stop = StopAnchor()
+        stop.begin(estimate().copy(latitude = 0.0, longitude = 179.99999))
+        stop.add(estimate().copy(latitude = 0.0, longitude = -179.99999, accuracyMeters = 6.0, monotonicSeconds = 2.0))
+        val before = assertNotNull(stop.estimate(7.0, 7.0))
+        assertEquals(1.0, distanceMeters(0.0, 179.99999, before.latitude, before.longitude), 1e-6)
+        stop.add(estimate().copy(latitude = 0.00001, longitude = -179.99999, accuracyMeters = 5.0, monotonicSeconds = 7.0))
+        val after = assertNotNull(stop.estimate(7.0, 7.0))
+        assertEquals(0.0, distanceMeters(before.latitude, before.longitude, after.latitude, after.longitude), 1e-6)
+        val next = assertNotNull(stop.estimate(12.0, 12.0))
+        assertTrue(distanceMeters(after.latitude, after.longitude, next.latitude, next.longitude) <= 1.000001)
+        assertTrue(next.accuracyMeters >= 5.0 + distanceMeters(next.latitude, next.longitude, 0.00001, -179.99999) - 1e-6)
     }
 
     @Test fun refiningAnchorDoesNotHideDeparture() {
