@@ -339,8 +339,10 @@ class TrackThrottleTests {
         assertTrue(throttle.shouldRecord(point(time = 2.0, source = LocationSource.stationary)))
         throttle.recorded(point(source = LocationSource.stationary))
         assertFalse(throttle.shouldRecord(point(time = 11.0, source = LocationSource.stationary)))
-        assertFalse(throttle.shouldRecord(point(time = 200.0, lat = 50.001, accuracy = 3.0,
-            source = LocationSource.stationary)))
+        assertTrue(throttle.shouldRecord(point(time = 31.0, source = LocationSource.stationary)))
+        throttle.recorded(point(time = 31.0, source = LocationSource.stationary))
+        assertFalse(throttle.shouldRecord(point(time = 60.0, source = LocationSource.stationary)))
+        assertTrue(throttle.shouldRecord(point(time = 61.0, source = LocationSource.stationary)))
     }
 
     @Test fun reportedSpeedWithoutGroundTrackDoesNotRecord() {

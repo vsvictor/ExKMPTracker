@@ -20,8 +20,10 @@ class TrackThrottle(private val config: TrackerConfig = TrackerConfig()) {
 
     fun shouldRecord(estimate: TrackEstimate): Boolean {
         val last = previous ?: return true
-        // A held stop is one coordinate. A later copy, however far the mean moved, is not mileage.
-        if (last.source == LocationSource.stationary && estimate.source == LocationSource.stationary) return false
+        // A held stop remains one coordinate, but is recorded periodically.
+        if (last.source == LocationSource.stationary && estimate.source == LocationSource.stationary) {
+            return estimate.monotonicSeconds - last.monotonicSeconds >= config.recordIntervalSeconds
+        }
         if (becameStationary(last, estimate) || sourceRecovered(last, estimate) ||
             accuracyShifted(last, estimate)) return true
         // A same-place speed glitch is jitter. A departure that actually moved is kept.

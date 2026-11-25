@@ -36,9 +36,11 @@ class TrackerBlocTests {
         var accepted: ((List<TrackPoint>) -> List<String>) = { points -> points.map { it.id } }
         var beforeResponse: (suspend () -> Unit)? = null
         var calls = 0
+        val batches = mutableListOf<List<TrackPoint>>()
         override suspend fun serverTime(session: TrackingSession) = ServerTime(1000)
         override suspend fun ingest(session: TrackingSession, points: List<TrackPoint>): List<String> {
             calls++
+            batches.add(points.toList())
             beforeResponse?.invoke()
             return accepted(points)
         }
@@ -216,6 +218,27 @@ class TrackerBlocTests {
         }
         runCurrent()
         assertEquals(Activity.UNKNOWN, f.bloc.state.value.activity)
+    }
+
+    @Test fun stationaryPointsAreRecordedAndUploadedEveryThirtySeconds() = runTest {
+        val f = Fixture(backgroundScope)
+        f.bloc.dispatch(TrackerEvent.Start(session))
+        repeat(10) { i ->
+            f.bloc.dispatch(TrackerEvent.Motion(MotionSample(i / 10.0, 0.0, 0.0, 0.01)))
+        }
+        f.fix()
+        runCurrent()
+        assertEquals(LocationSource.stationary, f.bloc.state.value.estimate?.source)
+
+        for (second in 1..91) {
+            f.clock.now = second.toDouble()
+            f.bloc.dispatch(TrackerEvent.Tick)
+            runCurrent()
+        }
+
+        val points = f.transport.batches.flatten().filter { it.source == LocationSource.stationary }
+        assertEquals(listOf(1_000L, 31_000L, 61_000L, 91_000L), points.map { it.deviceTimeMs })
+        assertEquals(0, f.queue.size(session.identity))
     }
 
     @Test fun parkedColdStartDoesNotRequireMovingCourseToDetectQuietImu() = runTest {

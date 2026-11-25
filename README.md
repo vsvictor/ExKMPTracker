@@ -23,6 +23,8 @@ MoQ offload (phase 3) is not implemented and cannot be enabled.
   attitude-aware motion input; optional activity/step sensors.
 - Four-state EKF with Joseph covariance updates, chi-square outlier rejection,
   stationary drift suppression and bounded, explicitly labelled dead reckoning.
+- While stationary, the held position is recorded every `recordIntervalSeconds`
+  (30 seconds by default); delivery remains subject to connectivity and batching.
 - Durable protected offline queue, owner partitioning, 16-byte secure IDs,
   at-least-once JSON-RPC delivery and exact FIFO-prefix acknowledgements.
 - Clock consistency and mock/teleport checks; Android GNSS interference
