@@ -6,5 +6,5 @@ plugins {
 
 allprojects {
     group = "com.exkmptracker"
-    version = "1.1.14"
+    version = "1.1.15"
 }

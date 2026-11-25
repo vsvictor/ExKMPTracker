@@ -59,6 +59,9 @@ class TrackerBloc(
     private var parkHold: TrackEstimate? = null
     private var lastRaw: LocationFix? = null
     private var lastRecorded: TrackEstimate? = null
+    private var lastStatisticsPoint: TrackPoint? = null
+    private val stationaryStatisticsOrigins = mutableMapOf<LocationSource, LocationFix>()
+    private val stationaryStatisticsMaxima = mutableMapOf<LocationSource, Double>()
     private var lastPreciseTime = Double.NEGATIVE_INFINITY
     private var lastFlush = Double.NEGATIVE_INFINITY
     private var flushJob: Job? = null
@@ -185,6 +188,8 @@ class TrackerBloc(
             lastFlush = Double.NEGATIVE_INFINITY
             filter = TrackingFilter(config)
             stop = StopAnchor()
+            stationaryStatisticsOrigins.clear()
+            stationaryStatisticsMaxima.clear()
             clearPark()
             throttle = TrackThrottle(config)
             pendingStill = false
@@ -395,6 +400,9 @@ class TrackerBloc(
             clearPark()
             lastRaw = null
             lastRecorded = null
+            lastStatisticsPoint = null
+            stationaryStatisticsOrigins.clear()
+            stationaryStatisticsMaxima.clear()
             lastPreciseTime = Double.NEGATIVE_INFINITY
             motion = null
             quietSamples = 0
@@ -416,6 +424,12 @@ class TrackerBloc(
 
     private suspend fun position(fix: LocationFix) {
         val now = clock.monotonicSeconds()
+        if (fix.source in setOf(LocationSource.fused, LocationSource.gps, LocationSource.network)) {
+            val stats = state.value.statistics
+            mutableState.value = state.value.copy(statistics = stats.copy(
+                acquisitions = stats.acquisitions + (fix.source to ((stats.acquisitions[fix.source] ?: 0L) + 1)),
+            ))
+        }
         if (fix.source == LocationSource.network) {
             mutableState.value = state.value.copy(networkFixes = state.value.networkFixes + 1)
         }
@@ -434,11 +448,21 @@ class TrackerBloc(
                 else "Coarse fix superseded by recent precise fix")
         }
         if (fix.source != LocationSource.network && guard.suspect(now)) return reject("GNSS time disagrees with server")
+        val previousPrediction = state.value.autonomousEstimate?.takeIf { it.source == LocationSource.deadReckoning }
         val controls = controls(now)
         val estimate = filter.fix(fix, controls.first, controls.second, state.value.activity == Activity.IN_VEHICLE,
             guard.strongCn0(fix.monotonicSeconds))
             ?: return reject(filter.rejection ?: "Rejected fix")
         lastRaw = fix
+        if (previousPrediction != null && fix.source in setOf(LocationSource.gps, LocationSource.fused)) {
+            val stats = state.value.statistics
+            mutableState.value = state.value.copy(statistics = stats.copy(
+                deadReckoningErrorMeters = stats.deadReckoningErrorMeters + distanceMeters(
+                    previousPrediction.latitude, previousPrediction.longitude, fix.latitude, fix.longitude,
+                ),
+                deadReckoningRecoveries = stats.deadReckoningRecoveries + 1,
+            ))
+        }
         if (fix.isPreciseFix()) {
             lastPreciseTime = fix.monotonicSeconds
             notePreciseMotion(fix)
@@ -449,6 +473,8 @@ class TrackerBloc(
         }
         if (stop.shouldRelease(fix)) {
             stop = StopAnchor()
+            stationaryStatisticsOrigins.clear()
+            stationaryStatisticsMaxima.clear()
             clearPark()
         }
         if (!stop.active && quietMotion(now) && fix.speedMps in 0.0..<0.5 &&
@@ -476,6 +502,21 @@ class TrackerBloc(
         }
         val pinned = if (!stop.active) parkHold?.takeIf { park.pinned() } else null
         if (stop.active) {
+            if (fix.source in setOf(LocationSource.gps, LocationSource.fused, LocationSource.network) &&
+                (!config.antiFake || !fix.isMock)) {
+                val origin = stationaryStatisticsOrigins.getOrPut(fix.source) { fix }
+                val drift = distanceMeters(origin.latitude, origin.longitude, fix.latitude, fix.longitude)
+                val previous = stationaryStatisticsMaxima[fix.source] ?: 0.0
+                if (drift > previous) {
+                    stationaryStatisticsMaxima[fix.source] = drift
+                    val stats = state.value.statistics
+                    val total = stats.stationaryDriftMetersBySource[fix.source] ?: 0.0
+                    mutableState.value = state.value.copy(statistics = stats.copy(
+                        stationaryDriftMetersBySource = stats.stationaryDriftMetersBySource +
+                            (fix.source to (total + drift - previous)),
+                    ))
+                }
+            }
             stop.driftMeters(fix)?.let { drift ->
                 val old = state.value
                 val count = old.stationaryDriftSamples + 1
@@ -528,7 +569,16 @@ class TrackerBloc(
         val speed = state.value.estimate?.speedMps ?: 0.0
         if (now - lastFlush >= throttle.flushIntervalSeconds(speed, stop.active) && flushJob == null) scheduleFlush(now)
         val source = state.value.estimate?.source
-        mutableState.value = state.value.copy(flags = flags(now, source))
+        val ref = guard.reference?.takeIf { now - it.atMonotonic in 0.0..300.0 }
+        val gnss = guard.gnss?.takeIf { now - it.monotonicSeconds in 0.0..5.0 }
+        val wall = clock.wallTimeMs()
+        val stats = state.value.statistics.copy(
+            serverClockOffsetMs = ref?.let { wall - (it.serverTimeMs + (now - it.atMonotonic) * 1000) },
+            gnssClockOffsetMs = gnss?.utcTimeMs?.let { wall - (it + (now - gnss.monotonicSeconds) * 1000) },
+            gnssMeanCn0DbHz = gnss?.meanCn0DbHz,
+            gnssUsedCn0DbHz = gnss?.strongCn0DbHz,
+        )
+        mutableState.value = state.value.copy(flags = flags(now, source), statistics = stats)
     }
 
     private fun heldEstimate(now: Double) =
@@ -606,6 +656,8 @@ class TrackerBloc(
         if (stop.active && moving != null && sample.monotonicSeconds - moving >= 5.0 &&
             sample.monotonicSeconds - lastPreciseTime > 5.0) {
             stop = StopAnchor()
+            stationaryStatisticsOrigins.clear()
+            stationaryStatisticsMaxima.clear()
             clearPark()
         }
     }
@@ -727,6 +779,16 @@ class TrackerBloc(
         )
         require(point.id.matches(Regex("[0-9a-f]{32}"))) { "Point ID must be 16 secure random bytes in hex" }
         queue.append(active.identity, point)
+        val previous = lastStatisticsPoint
+        val distance = previous?.let { distanceMeters(it.smoothedLatitude, it.smoothedLongitude, point.smoothedLatitude, point.smoothedLongitude) } ?: 0.0
+        val stats = state.value.statistics
+        mutableState.value = state.value.copy(statistics = stats.copy(
+            enqueuedPoints = stats.enqueuedPoints + 1,
+            trackMeters = stats.trackMeters + distance,
+            stationaryTrackMeters = stats.stationaryTrackMeters +
+                if (previous?.source == LocationSource.stationary && point.source == LocationSource.stationary) distance else 0.0,
+        ))
+        lastStatisticsPoint = point
         throttle.recorded(estimate)
         lastRecorded = estimate
         mutableState.value = state.value.copy(queuedPoints = state.value.queuedPoints + 1)
@@ -788,7 +850,9 @@ class TrackerBloc(
     }
 
     private fun reject(reason: String) {
-        mutableState.value = state.value.copy(rejection = reason, rejectedFixes = state.value.rejectedFixes + 1)
+        val stats = state.value.statistics
+        mutableState.value = state.value.copy(rejection = reason, rejectedFixes = state.value.rejectedFixes + 1,
+            statistics = stats.copy(rejections = stats.rejections + (reason to ((stats.rejections[reason] ?: 0L) + 1))))
     }
 
     private fun fail(message: String, cause: Throwable?) {

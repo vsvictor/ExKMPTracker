@@ -21,4 +21,5 @@ data class TrackerState(
     val stationaryDriftMaxMeters: Double = 0.0,
     val lastUploadTimeMs: Long? = null,
     val flags: Set<String> = emptySet(),
+    val statistics: TrackerStatistics = TrackerStatistics(),
 )

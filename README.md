@@ -112,3 +112,14 @@ configuration are mandatory. Force-stop/force-quit, system restrictions or
 disabled location can stop tracking. No platform guarantees exactly 1 Hz or
 uninterrupted execution. Background location must be disclosed to users and
 meet the host application's store/privacy requirements.
+# Tracker statistics
+
+`TrackerState.statistics` provides source acquisition counts before filtering, rejection
+counts by reason, points enqueued during the current runtime, and distances between
+successive newly enqueued points. `stationaryTrackMeters` counts only segments whose two
+endpoints are stationary; it includes gradual anchor refinement and is not server mileage.
+`stationaryDriftMetersBySource` sums each stop's maximum accepted raw-fix displacement
+from that source's first accepted fix at the stop; this is not the distance travelled.
+The dead-reckoning error is measured between the last autonomous prediction and the first
+accepted GPS/fused raw fix following it. Clock offsets and GNSS signal readings expire when
+their evidence is no longer fresh. Counters do not include points queued before this runtime.
