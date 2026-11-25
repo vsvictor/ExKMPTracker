@@ -61,6 +61,10 @@ class TrackerForegroundService : Service() {
     private var recognizedActivity = TrackerActivity.UNKNOWN
     private val binder = TrackerBinder()
     private val _trackingState = MutableStateFlow(TrackerState())
+    private val serviceStats by lazy { getSharedPreferences("exkmptracker.service.statistics", Context.MODE_PRIVATE) }
+    private var serviceStarts = 0L
+    private var serviceRestarts = 0L
+    private var restartRecorded = false
     val trackingState: StateFlow<TrackerState> = _trackingState.asStateFlow()
 
     inner class TrackerBinder : Binder() {
@@ -117,6 +121,10 @@ class TrackerForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        serviceStarts = serviceStats.getLong("starts", 0L) + 1
+        serviceRestarts = serviceStats.getLong("restarts", 0L)
+        serviceStats.edit().putLong("starts", serviceStarts).apply()
+        _trackingState.value = _trackingState.value.copy(serviceStarts = serviceStarts, serviceRestarts = serviceRestarts)
         createNotificationChannel()
     }
 
@@ -150,6 +158,12 @@ class TrackerForegroundService : Service() {
         if (intent == null && (application as? AndroidTrackerProvider)?.allowsStickyRestore(this) != true) {
             stopSelf(startId)
             return START_NOT_STICKY
+        }
+        if (intent == null && !restartRecorded) {
+            restartRecorded = true
+            serviceRestarts++
+            serviceStats.edit().putLong("restarts", serviceRestarts).apply()
+            _trackingState.value = _trackingState.value.copy(serviceStarts = serviceStarts, serviceRestarts = serviceRestarts)
         }
         if (intent != null && intent.action != ACTION_START) return START_NOT_STICKY
         try {
@@ -292,7 +306,7 @@ class TrackerForegroundService : Service() {
             activeRuntime.bloc.state.collect { state: TrackerState ->
                 activeRuntime.sensors.updateAcceptedEstimate(
                     if (state.sections.stage1) state.autonomousEstimate else null)
-                _trackingState.value = state
+                _trackingState.value = state.copy(serviceStarts = serviceStarts, serviceRestarts = serviceRestarts)
                 activeRuntime.setStationary(state.activity == TrackerActivity.STILL)
             }
         }

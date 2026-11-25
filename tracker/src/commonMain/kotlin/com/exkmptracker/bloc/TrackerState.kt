@@ -22,4 +22,6 @@ data class TrackerState(
     val lastUploadTimeMs: Long? = null,
     val flags: Set<String> = emptySet(),
     val statistics: TrackerStatistics = TrackerStatistics(),
+    val serviceStarts: Long? = null,
+    val serviceRestarts: Long? = null,
 )

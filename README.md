@@ -123,3 +123,5 @@ from that source's first accepted fix at the stop; this is not the distance trav
 The dead-reckoning error is measured between the last autonomous prediction and the first
 accepted GPS/fused raw fix following it. Clock offsets and GNSS signal readings expire when
 their evidence is no longer fresh. Counters do not include points queued before this runtime.
+Android service start and sticky-restart counters are persisted on the device since app
+data was last cleared. A sticky restart is counted only when the host permits restoration.
