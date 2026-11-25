@@ -24,7 +24,7 @@ MoQ offload (phase 3) is not implemented and cannot be enabled.
 - Four-state EKF with Joseph covariance updates, chi-square outlier rejection,
   stationary drift suppression and bounded, explicitly labelled dead reckoning.
 - While stationary, the held position is recorded and queued for upload every
-  10 seconds. A new accepted estimate replaces it only if its
+  `stationaryIntervalSeconds` (30 seconds by default). A new accepted estimate replaces it only if its
   smoothed accuracy improves; delivery remains subject to connectivity and batching.
 - Durable protected offline queue, owner partitioning, 16-byte secure IDs,
   at-least-once JSON-RPC delivery and exact FIFO-prefix acknowledgements.

@@ -22,7 +22,7 @@ class TrackThrottle(private val config: TrackerConfig = TrackerConfig()) {
         val last = previous ?: return true
         // A held stop remains one coordinate, but is recorded periodically.
         if (last.source == LocationSource.stationary && estimate.source == LocationSource.stationary) {
-            return estimate.monotonicSeconds - last.monotonicSeconds >= STATIONARY_INTERVAL_SECONDS
+            return estimate.monotonicSeconds - last.monotonicSeconds >= config.stationaryIntervalSeconds
         }
         if (becameStationary(last, estimate) || sourceRecovered(last, estimate) ||
             accuracyShifted(last, estimate)) return true
@@ -45,7 +45,7 @@ class TrackThrottle(private val config: TrackerConfig = TrackerConfig()) {
         (REFERENCE_FLUSH_SECONDS * scale(speedMps)).coerceIn(MIN_FLUSH_SECONDS, MAX_FLUSH_SECONDS)
 
     fun flushIntervalSeconds(speedMps: Double, stationary: Boolean): Double =
-        if (stationary) STATIONARY_INTERVAL_SECONDS else flushIntervalSeconds(speedMps)
+        if (stationary) config.stationaryIntervalSeconds else flushIntervalSeconds(speedMps)
 
     private fun gates(speedMps: Double): Gates {
         val factor = scale(speedMps)
@@ -137,7 +137,6 @@ class TrackThrottle(private val config: TrackerConfig = TrackerConfig()) {
         const val MIN_INTERVAL_SECONDS = 5.0
         const val MAX_INTERVAL_SECONDS = 120.0
         const val REFERENCE_FLUSH_SECONDS = 10.0
-        const val STATIONARY_INTERVAL_SECONDS = 10.0
         const val MIN_FLUSH_SECONDS = 5.0
         const val MAX_FLUSH_SECONDS = 30.0
         const val MOVING_SPEED_MPS = 1.0

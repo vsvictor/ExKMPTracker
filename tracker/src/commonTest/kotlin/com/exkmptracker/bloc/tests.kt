@@ -46,7 +46,7 @@ class TrackerBlocTests {
         }
     }
 
-    private class Fixture(scope: CoroutineScope) {
+    private class Fixture(scope: CoroutineScope, config: TrackerConfig = TrackerConfig()) {
         val clock = Clock()
         val queue = Queue()
         val transport = Transport()
@@ -55,7 +55,8 @@ class TrackerBlocTests {
         val bloc = TrackerBloc(scope, clock, queue, transport,
             object : PointIdGenerator { override fun newId() = (++nextId).toString(16).padStart(32, '0') },
             object : TrackerLogger { override fun error(message: String, cause: Throwable?) { logged.add(message) } },
-            object : SensorController { override fun setStationary(stationary: Boolean) {} })
+            object : SensorController { override fun setStationary(stationary: Boolean) {} },
+            config = config)
         fun fix(time: Double = clock.now, source: LocationSource = LocationSource.gps) {
             bloc.dispatch(TrackerEvent.Position(LocationFix(50.0, 30.0, 5.0,
                 (time * 1000).toLong(), time, source, 0.0, 0.0)))
@@ -220,8 +221,16 @@ class TrackerBlocTests {
         assertEquals(Activity.UNKNOWN, f.bloc.state.value.activity)
     }
 
-    @Test fun stationaryPointsAreRecordedAndUploadedEveryTenSeconds() = runTest {
-        val f = Fixture(backgroundScope)
+    @Test fun stationaryPointsAreRecordedAndUploadedEveryThirtySeconds() = runTest {
+        assertStationaryCadence(TrackerConfig(), 30)
+    }
+
+    @Test fun stationaryPointsAreRecordedAndUploadedEveryFiveSeconds() = runTest {
+        assertStationaryCadence(TrackerConfig(stationaryIntervalSeconds = 5.0), 5)
+    }
+
+    private suspend fun TestScope.assertStationaryCadence(config: TrackerConfig, interval: Int) {
+        val f = Fixture(backgroundScope, config)
         f.bloc.dispatch(TrackerEvent.Start(session))
         repeat(10) { i ->
             f.bloc.dispatch(TrackerEvent.Motion(MotionSample(i / 10.0, 0.0, 0.0, 0.01)))
@@ -230,14 +239,14 @@ class TrackerBlocTests {
         runCurrent()
         assertEquals(LocationSource.stationary, f.bloc.state.value.estimate?.source)
 
-        for (second in 1..31) {
+        for (second in 1..1 + interval * 3) {
             f.clock.now = second.toDouble()
             f.bloc.dispatch(TrackerEvent.Tick)
             runCurrent()
         }
 
         val points = f.transport.batches.flatten().filter { it.source == LocationSource.stationary }
-        assertEquals(listOf(1_000L, 11_000L, 21_000L, 31_000L), points.map { it.deviceTimeMs })
+        assertEquals((0..3).map { (1L + it * interval) * 1_000L }, points.map { it.deviceTimeMs })
         assertEquals(4, f.transport.batches.size)
         assertTrue(f.transport.batches.all { it.size == 1 })
         assertEquals(0, f.queue.size(session.identity))

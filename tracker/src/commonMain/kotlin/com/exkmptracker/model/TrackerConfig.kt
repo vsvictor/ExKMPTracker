@@ -9,11 +9,12 @@ data class TrackerConfig @Throws(IllegalArgumentException::class) constructor(
     val recordDistanceMeters: Double = 25.0,
     val recordBearingDegrees: Double = 10.0,
     val recordIntervalSeconds: Double = 30.0,
+    val stationaryIntervalSeconds: Double = 30.0,
 ) {
     init {
         require(listOf(maxGnssAccuracyMeters, maxNetworkAccuracyMeters, maxEstimateAccuracyMeters,
             predictionHorizonSeconds, recordDistanceMeters, recordBearingDegrees,
-            recordIntervalSeconds).all { it.isFinite() && it > 0 })
+            recordIntervalSeconds, stationaryIntervalSeconds).all { it.isFinite() && it > 0 })
         require(predictionHorizonSeconds <= 15.0) { "Dead reckoning must not exceed 15 seconds" }
     }
 }
