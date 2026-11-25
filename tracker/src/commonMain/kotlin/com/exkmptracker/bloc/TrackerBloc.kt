@@ -485,7 +485,7 @@ class TrackerBloc(
                     stationaryDriftMaxMeters = max(old.stationaryDriftMaxMeters, drift))
             }
             stop.add(estimate)
-            record(heldEstimate(now) ?: estimate, null)
+            record(heldEstimate(now) ?: estimate, fix)
         } else {
             record(pinned?.copy(monotonicSeconds = estimate.monotonicSeconds) ?: estimate, fix)
         }
@@ -501,7 +501,7 @@ class TrackerBloc(
         expireCooperative(now)
         val raw = lastRaw
         if (stop.active) {
-            heldEstimate(now)?.let { record(it, null) }
+            heldEstimate(now)?.let { record(it, raw) }
         } else if (raw != null && now - raw.monotonicSeconds > 2.0 &&
             state.value.activity != Activity.WALKING && state.value.activity != Activity.STILL) {
             // Quiet IMU alone cannot distinguish a parked car from constant-speed driving.
@@ -511,7 +511,7 @@ class TrackerBloc(
                 if (held != null) {
                     filter.stationary()
                     stop.begin(held.copy(monotonicSeconds = now))
-                    heldEstimate(now)?.let { record(it, null) }
+                    heldEstimate(now)?.let { record(it, raw) }
                 } else {
                     filter.stationary()
                     predict(now)

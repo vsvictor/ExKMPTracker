@@ -26,6 +26,8 @@ MoQ offload (phase 3) is not implemented and cannot be enabled.
 - While stationary, the held position is recorded and queued for upload every
   `stationaryIntervalSeconds` (30 seconds by default). A new accepted estimate replaces it only if its
   smoothed accuracy improves; delivery remains subject to connectivity and batching.
+  Stationary records include the latest accepted raw fix and its original `observedAtMs`.
+  The same fix may be repeated when no newer one is available; `deviceTimeMs` is the record time.
 - Durable protected offline queue, owner partitioning, 16-byte secure IDs,
   at-least-once JSON-RPC delivery and exact FIFO-prefix acknowledgements.
 - Clock consistency and mock/teleport checks; Android GNSS interference

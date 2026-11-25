@@ -247,6 +247,8 @@ class TrackerBlocTests {
 
         val points = f.transport.batches.flatten().filter { it.source == LocationSource.stationary }
         assertEquals((0..3).map { (1L + it * interval) * 1_000L }, points.map { it.deviceTimeMs })
+        assertTrue(points.all { it.rawLatitude == 50.0 && it.rawLongitude == 30.0 && it.rawAccuracyMeters == 5.0 })
+        assertTrue(points.all { it.observedAtMs == 1_000L })
         assertEquals(4, f.transport.batches.size)
         assertTrue(f.transport.batches.all { it.size == 1 })
         assertEquals(0, f.queue.size(session.identity))
@@ -279,7 +281,68 @@ class TrackerBlocTests {
         val heartbeat = f.transport.batches.flatten().last()
         assertEquals(LocationSource.stationary, heartbeat.source)
         assertEquals(improved.latitude, heartbeat.smoothedLatitude, 1e-9)
+        assertEquals(50.00001, heartbeat.rawLatitude)
+        assertEquals(30.0, heartbeat.rawLongitude)
+        assertEquals(4.0, heartbeat.rawAccuracyMeters)
+        assertEquals(2000L, heartbeat.observedAtMs)
+        assertEquals(31_000L, heartbeat.deviceTimeMs)
         assertEquals(0, f.queue.size(session.identity))
+    }
+
+    @Test fun stationaryRecordingUsesLatestAcceptedRawFixAndPreservesObservationTime() = runTest {
+        val f = Fixture(backgroundScope, TrackerConfig(stationaryIntervalSeconds = 5.0))
+        f.bloc.dispatch(TrackerEvent.Start(session))
+        repeat(10) { i ->
+            f.bloc.dispatch(TrackerEvent.Motion(MotionSample(i / 10.0, 0.0, 0.0, 0.01)))
+        }
+        f.fix()
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+
+        f.clock.now = 5.0
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00001, 30.0, 4.0, 4_500L, 5.0,
+            LocationSource.gps, 0.0, 0.0)))
+        runCurrent()
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00002, 30.0, 150.0, 5_000L, 5.0,
+            LocationSource.gps, 0.0, 0.0)))
+        runCurrent()
+        f.clock.now = 6.0
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+        f.clock.now = 11.0
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+
+        val points = f.transport.batches.flatten()
+        assertEquals(3, points.size)
+        for (point in points.drop(1)) {
+            assertEquals(50.00001, point.rawLatitude)
+            assertEquals(30.0, point.rawLongitude)
+            assertEquals(4.0, point.rawAccuracyMeters)
+            assertEquals(4_500L, point.observedAtMs)
+            assertTrue(point.deviceTimeMs > point.observedAtMs)
+        }
+
+        @Test fun stationaryPositionEventRecordsItsRawFixWhenIntervalIsDue() = runTest {
+            val f = Fixture(backgroundScope, TrackerConfig(stationaryIntervalSeconds = 5.0))
+            f.bloc.dispatch(TrackerEvent.Start(session))
+            repeat(10) { i ->
+                f.bloc.dispatch(TrackerEvent.Motion(MotionSample(i / 10.0, 0.0, 0.0, 0.01)))
+            }
+            f.fix()
+            f.bloc.dispatch(TrackerEvent.Tick)
+            runCurrent()
+            f.clock.now = 6.0
+            f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00001, 30.0, 4.0, 5_500L, 6.0,
+                LocationSource.gps, 0.0, 0.0)))
+            f.bloc.dispatch(TrackerEvent.Tick)
+            runCurrent()
+            val point = f.transport.batches.flatten().last()
+            assertEquals(LocationSource.stationary, point.source)
+            assertEquals(50.00001, point.rawLatitude)
+            assertEquals(4.0, point.rawAccuracyMeters)
+            assertEquals(5_500L, point.observedAtMs)
+        }
     }
 
     @Test fun parkedColdStartDoesNotRequireMovingCourseToDetectQuietImu() = runTest {
