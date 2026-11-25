@@ -220,7 +220,7 @@ class TrackerBlocTests {
         assertEquals(Activity.UNKNOWN, f.bloc.state.value.activity)
     }
 
-    @Test fun stationaryPointsAreRecordedAndUploadedEveryThirtySeconds() = runTest {
+    @Test fun stationaryPointsAreRecordedAndUploadedEveryTenSeconds() = runTest {
         val f = Fixture(backgroundScope)
         f.bloc.dispatch(TrackerEvent.Start(session))
         repeat(10) { i ->
@@ -230,14 +230,16 @@ class TrackerBlocTests {
         runCurrent()
         assertEquals(LocationSource.stationary, f.bloc.state.value.estimate?.source)
 
-        for (second in 1..91) {
+        for (second in 1..31) {
             f.clock.now = second.toDouble()
             f.bloc.dispatch(TrackerEvent.Tick)
             runCurrent()
         }
 
         val points = f.transport.batches.flatten().filter { it.source == LocationSource.stationary }
-        assertEquals(listOf(1_000L, 31_000L, 61_000L, 91_000L), points.map { it.deviceTimeMs })
+        assertEquals(listOf(1_000L, 11_000L, 21_000L, 31_000L), points.map { it.deviceTimeMs })
+        assertEquals(4, f.transport.batches.size)
+        assertTrue(f.transport.batches.all { it.size == 1 })
         assertEquals(0, f.queue.size(session.identity))
     }
 

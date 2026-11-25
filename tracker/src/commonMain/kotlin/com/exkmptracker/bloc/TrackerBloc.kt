@@ -526,7 +526,7 @@ class TrackerBloc(
                 rejection = if (cooperative == null) "No reliable position: prediction horizon exceeded" else null)
         }
         val speed = state.value.estimate?.speedMps ?: 0.0
-        if (now - lastFlush >= throttle.flushIntervalSeconds(speed) && flushJob == null) scheduleFlush(now)
+        if (now - lastFlush >= throttle.flushIntervalSeconds(speed, stop.active) && flushJob == null) scheduleFlush(now)
         val source = state.value.estimate?.source
         mutableState.value = state.value.copy(flags = flags(now, source))
     }
