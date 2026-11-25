@@ -50,6 +50,8 @@ class IosTrackerRuntime(
     idGenerator: PointIdGenerator = IosPointIdGenerator(),
     vision: EdgeVisionController? = null,
     vehicleClass: VehicleClass = VehicleClass.CAR,
+    vehicleClassSource: (() -> VehicleClass?)? = null,
+    visionBuiltFor: VehicleClass? = null,
 ) {
     private val trackerLogger = logger
     private val sessions = sessionStore
@@ -69,6 +71,8 @@ class IosTrackerRuntime(
         cooperativeTransport = transport as? CooperativeTransport,
         vision = vision,
         vehicleClass = vehicleClass,
+        vehicleClassSource = vehicleClassSource,
+        visionBuiltFor = visionBuiltFor,
     )
     private val courseReference = IosAcceptedCourseReference(clock)
     private var locationSource: IosLocationSource? = null
@@ -100,8 +104,26 @@ class IosTrackerRuntime(
         ownsScope = true
     }
 
+    /** Live ego class. The next sync reads [vehicleClassSource] instead of a value captured here. */
+    constructor(
+        transport: TrackingTransport,
+        vehicleClassSource: () -> VehicleClass?,
+    ) : this(
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        transport = transport,
+        vehicleClassSource = vehicleClassSource,
+    ) {
+        ownsScope = true
+    }
+
     @Throws(IllegalArgumentException::class, IllegalStateException::class)
     suspend fun section(number: Int, enabled: Boolean) = bloc.section(number, enabled)
+
+    fun visionClass(): VehicleClass? = bloc.visionClass()
+
+    @Throws(IllegalArgumentException::class, IllegalStateException::class)
+    suspend fun replaceVision(controller: EdgeVisionController?, builtFor: VehicleClass?) =
+        bloc.replaceVision(controller, builtFor)
 
     /**
      * Explicit Swift initializer with an instance-owned scope. Pass one [IosProtectedStorage]

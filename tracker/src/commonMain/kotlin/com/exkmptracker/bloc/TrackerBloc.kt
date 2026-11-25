@@ -20,8 +20,11 @@ class TrackerBloc(
     private val config: TrackerConfig = TrackerConfig(),
     private val mapMatcher: MapMatcher? = null,
     private val cooperativeTransport: CooperativeTransport? = null,
-    private val vision: EdgeVisionController? = null,
+    vision: EdgeVisionController? = null,
     private val vehicleClass: VehicleClass? = VehicleClass.CAR,
+    private val vehicleClassSource: (() -> VehicleClass?)? = null,
+    visionBuiltFor: VehicleClass? = null,
+    private val visionFactory: ((VehicleClass) -> EdgeVisionController?)? = null,
 ) {
     private sealed interface Message {
         data class Event(val event: TrackerEvent) : Message
@@ -29,6 +32,11 @@ class TrackerBloc(
         data class Observations(val token: Long, val value: ObservedPeers) : Message
         data class VisionError(val token: Long, val reason: String) : Message
         data class CooperativeTick(val token: Long) : Message
+        data class ReplaceVision(
+            val controller: EdgeVisionController?,
+            val builtFor: VehicleClass?,
+            val completion: CompletableDeferred<Unit>,
+        ) : Message
         data class CooperativeResult(
             val token: Long, val snapshot: TrackingFilter, val observations: ObservedPeers,
             val timestamp: Long, val donors: List<MatchedDonor>, val error: Exception?,
@@ -80,6 +88,8 @@ class TrackerBloc(
     private var lastObservationTime = Double.NEGATIVE_INFINITY
     private var cooperativeEstimate: TrackEstimate? = null
     private var cooperativeFilter: TrackingFilter? = null
+    private var activeVision: EdgeVisionController? = vision
+    private val boundVisionClass = MutableStateFlow(visionBuiltFor)
     private var visionFailure: String? = null
     private var lastCooperativeCapture = Double.NEGATIVE_INFINITY
     private val actor = blocScope.launch {
@@ -120,6 +130,23 @@ class TrackerBloc(
                             logger.error("Edge vision: ${message.reason}", null)
                         }
                         is Message.CooperativeTick -> if (message.token == cooperativeGeneration) syncPeers()
+                        is Message.ReplaceVision -> {
+                            try {
+                                installVision(message.controller, message.builtFor)
+                                message.completion.complete(Unit)
+                            } catch (error: Exception) {
+                                if (error is CancellationException) {
+                                    message.completion.cancel(error)
+                                    throw error
+                                }
+                                val failure = when (error) {
+                                    is IllegalArgumentException, is IllegalStateException -> error
+                                    else -> IllegalStateException("Vision replacement failed", error)
+                                }
+                                message.completion.completeExceptionally(failure)
+                                fail("Vision replacement failed: ${error.message}", error)
+                            }
+                        }
                         is Message.CooperativeResult -> cooperativeCompleted(message)
                     }
                 } catch (cancelled: CancellationException) {
@@ -142,6 +169,21 @@ class TrackerBloc(
     suspend fun shutdown() {
         messages.close()
         lifecycle.cancelAndJoin()
+    }
+
+    /** Class the installed controller was built for. Null when no class-bound camera is installed. */
+    fun visionClass(): VehicleClass? = boundVisionClass.value
+
+    /**
+     * Install a controller built for [builtFor]. A null controller stops the camera.
+     * Section 2 stays on only while a controller for the live class is installed.
+     */
+    @Throws(IllegalArgumentException::class, IllegalStateException::class)
+    suspend fun replaceVision(controller: EdgeVisionController?, builtFor: VehicleClass?) {
+        val completion = CompletableDeferred<Unit>()
+        check(actor.isActive) { "TrackerBloc is closed" }
+        messages.send(Message.ReplaceVision(controller, builtFor, completion))
+        selectCompletion(completion)
     }
 
     @Throws(IllegalArgumentException::class, IllegalStateException::class)
@@ -167,7 +209,7 @@ class TrackerBloc(
         val old = state.value.sections
         if (number == 2 && enabled) {
             check(old.stage1) { "Section 2 requires section 1" }
-            check(cooperativeTransport != null && vision != null) {
+            check(cooperativeTransport != null && activeVision != null) {
                 "Section 2 requires an injected cooperative transport, licensed model and calibrated vision controller"
             }
         }
@@ -214,7 +256,7 @@ class TrackerBloc(
         visionFailure = null
         mutableState.value = state.value.copy(cooperativeStatus = "Waiting for calibrated camera observations")
         try {
-            vision?.start(
+            activeVision?.start(
                 { messages.trySend(Message.Observations(token, it)) },
                 { messages.trySend(Message.VisionError(token, it)) },
             )
@@ -242,8 +284,13 @@ class TrackerBloc(
         visionFailure = null
         lastObservationTime = Double.NEGATIVE_INFINITY
         lastCooperativeCapture = Double.NEGATIVE_INFINITY
+        stopController(activeVision)
+    }
+
+    private fun stopController(controller: EdgeVisionController?) {
+        if (controller == null) return
         try {
-            vision?.stop()
+            controller.stop()
         } catch (error: Exception) {
             mutableState.value = state.value.copy(error = "Unable to stop edge vision resources")
             logger.error("Unable to stop edge vision", error)
@@ -263,11 +310,98 @@ class TrackerBloc(
         observations = value.copy(observations = value.observations.toList())
     }
 
+    /** A present source is authoritative, including when it returns null. Null must not fall back to [vehicleClass]. */
+    private fun resolveEgo(): VehicleClass? =
+        if (vehicleClassSource != null) vehicleClassSource.invoke() else vehicleClass
+
+    private fun markEgoUnset() {
+        if (vehicleClassSource != null && boundVisionClass.value != null) dropBoundVision()
+        mutableState.value = state.value.copy(cooperativeStatus = "Ego vehicle class is not set")
+    }
+
+    private fun dropBoundVision() {
+        if (state.value.sections.stage2) changeSection(2, false) else stopController(activeVision)
+        activeVision = null
+        boundVisionClass.value = null
+    }
+
+    /**
+     * Keeps the camera that was calibrated for [ego]. An injected controller with no bound class
+     * stays, so callers that omit [vehicleClassSource] are unchanged. A mismatch stops the old
+     * camera before this sync publishes.
+     */
+    private fun alignVision(ego: VehicleClass): Boolean {
+        if (vehicleClassSource == null) return true
+        if (boundVisionClass.value == ego && activeVision != null) return true
+        if (boundVisionClass.value == null && activeVision != null && visionFactory == null) return true
+        val factory = visionFactory
+        if (factory == null) {
+            if (boundVisionClass.value != null) dropBoundVision()
+            return false
+        }
+        val created = try {
+            factory(ego)
+        } catch (error: Exception) {
+            logger.error("Unable to rebuild edge vision", error)
+            null
+        }
+        if (created == null || vehicleClassSource.invoke() != ego) {
+            created?.let(::stopController)
+            if (boundVisionClass.value != null) dropBoundVision()
+            return false
+        }
+        val restart = state.value.sections.stage2
+        if (restart) stopCooperative() else stopController(activeVision)
+        activeVision = created
+        boundVisionClass.value = ego
+        observations = null
+        lastObservationTime = Double.NEGATIVE_INFINITY
+        if (!restart) return true
+        return try {
+            startCooperative()
+            true
+        } catch (error: Exception) {
+            logger.error("Unable to start rebuilt edge vision", error)
+            activeVision = null
+            boundVisionClass.value = null
+            false
+        }
+    }
+
+    private fun installVision(controller: EdgeVisionController?, builtFor: VehicleClass?) {
+        val live = if (vehicleClassSource != null) vehicleClassSource.invoke() else builtFor
+        if (controller != null && vehicleClassSource != null && live != builtFor) {
+            stopController(controller)
+            return
+        }
+        if (state.value.sections.stage2) changeSection(2, false) else stopController(activeVision)
+        activeVision = controller
+        boundVisionClass.value = if (controller != null) builtFor else null
+        when {
+            controller != null && state.value.sections.stage1 -> changeSection(2, true)
+            controller == null && live == null && vehicleClassSource != null ->
+                mutableState.value = state.value.copy(cooperativeStatus = "Ego vehicle class is not set")
+        }
+    }
+
     private fun syncPeers() {
         val now = clock.monotonicSeconds()
         expireCooperative(now)
         val active = session ?: return
-        if (!state.value.sections.stage2 || cooperativeJob != null) return
+        if (!state.value.sections.stage2) return
+        val ego = resolveEgo() ?: run {
+            cooperativeJob?.cancel()
+            cooperativeJob = null
+            markEgoUnset()
+            return
+        }
+        val visionChanged = boundVisionClass.value != null && boundVisionClass.value != ego
+        if (visionChanged) {
+            cooperativeJob?.cancel()
+            cooperativeJob = null
+        }
+        if (cooperativeJob != null) return
+        if (!alignVision(ego) || !state.value.sections.stage2) return
         val baseline = state.value.autonomousEstimate
         val reference = guard.reference?.takeIf {
             now - it.atMonotonic in 0.0..60.0 && it.uncertaintyMs <= 100
@@ -285,10 +419,6 @@ class TrackerBloc(
         val snapshot = if (freshGnss) filter.fork() else cooperativeFilter?.fork() ?: filter.fork()
         val predicted = snapshot.predict(frame.captureMonotonicSeconds, controls.first, controls.second, true)
             ?: baseline?.takeIf { frame.captureMonotonicSeconds == it.monotonicSeconds } ?: return
-        val ego = vehicleClass ?: run {
-            mutableState.value = state.value.copy(cooperativeStatus = "Ego vehicle class is not set")
-            return
-        }
         val activeFlags = flags(now, baseline?.source)
         val independent = lastRaw?.let {
             it.source != LocationSource.network && !it.isMock && now - it.monotonicSeconds in 0.0..1.0

@@ -33,9 +33,11 @@ class SectionTests {
         var cancelled = false
         var block = false
         var fixedLatitude: Double? = null
+        var published: VehicleClass? = null
         override suspend fun syncPeers(session: TrackingSession, captureTimestampMs: Long,
             state: CooperativeState, observations: List<VisualObservation>): List<MatchedDonor> {
             calls++
+            published = state.vehicleClass
             if (block) {
                 try { awaitCancellation() } finally { cancelled = true }
             }
@@ -49,6 +51,9 @@ class SectionTests {
         scope: CoroutineScope,
         configured: Boolean = true,
         vehicleClass: VehicleClass? = VehicleClass.CAR,
+        vehicleClassSource: (() -> VehicleClass?)? = null,
+        visionBuiltFor: VehicleClass? = null,
+        visionFactory: ((VehicleClass) -> EdgeVisionController?)? = null,
     ) {
         val clock = Clock()
         val vision = Vision()
@@ -74,7 +79,10 @@ class SectionTests {
             object : PlatformSensorProvider { override fun setStationary(stationary: Boolean) {} },
             cooperativeTransport = if (configured) peers else null,
             vision = if (configured) vision else null,
-            vehicleClass = vehicleClass)
+            vehicleClass = vehicleClass,
+            vehicleClassSource = vehicleClassSource,
+            visionBuiltFor = visionBuiltFor,
+            visionFactory = visionFactory)
         fun fix(latitude: Double = 50.0) = bloc.dispatch(TrackerEvent.Position(
             LocationFix(latitude, 30.0, 15.0, clock.wallTimeMs(), clock.now, LocationSource.gps, 0.0, 0.0)))
         fun frame() = vision.emit(ObservedPeers(clock.now,
@@ -94,6 +102,53 @@ class SectionTests {
         assertTrue(f.bloc.state.value.sections.stage1)
         assertEquals(0, f.peers.calls)
         assertEquals("Ego vehicle class is not set", f.bloc.state.value.cooperativeStatus)
+    }
+
+    @Test fun classSourcePublishesCarThenSkipsWhenUnset() = runTest {
+        var ego: VehicleClass? = VehicleClass.CAR
+        val f = Fixture(backgroundScope, vehicleClassSource = { ego })
+        f.bloc.dispatch(TrackerEvent.Start(f.session))
+        f.fix()
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+        f.bloc.section(2, true)
+        runCurrent()
+        assertEquals(1, f.peers.calls)
+        assertEquals(VehicleClass.CAR, f.peers.published)
+        f.peers.calls = 0
+        ego = null
+        advanceTimeBy(100)
+        runCurrent()
+        assertEquals(0, f.peers.calls)
+        assertEquals("Ego vehicle class is not set", f.bloc.state.value.cooperativeStatus)
+    }
+
+    @Test fun changedClassRebuildsVisionBeforePublishing() = runTest {
+        var ego: VehicleClass? = VehicleClass.CAR
+        val rebuilt = Vision()
+        val f = Fixture(
+            backgroundScope,
+            vehicleClassSource = { ego },
+            visionBuiltFor = VehicleClass.CAR,
+            visionFactory = { requested -> if (requested == VehicleClass.TRUCK) rebuilt else null },
+        )
+        f.bloc.dispatch(TrackerEvent.Start(f.session))
+        f.fix()
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+        f.bloc.section(2, true)
+        runCurrent()
+        assertEquals(VehicleClass.CAR, f.peers.published)
+        val stopsBefore = f.vision.stops
+        f.peers.calls = 0
+        ego = VehicleClass.TRUCK
+        advanceTimeBy(100)
+        runCurrent()
+        assertEquals(VehicleClass.TRUCK, f.peers.published)
+        assertTrue(f.peers.calls > 0)
+        assertTrue(f.vision.stops > stopsBefore)
+        assertTrue(rebuilt.starts > 0)
+        assertEquals(VehicleClass.TRUCK, f.bloc.visionClass())
     }
 
     @Test fun defaultsAndUnsupportedStageAreExplicit() = runTest {

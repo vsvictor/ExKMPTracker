@@ -12,6 +12,7 @@ import com.exkmptracker.ports.TrackingTransport
 import com.exkmptracker.ports.TrackerLogger
 import com.exkmptracker.ports.SensorController
 import com.exkmptracker.cooperative.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -60,6 +61,7 @@ class AndroidTrackerRuntime internal constructor(
     private var queueClosed = false
     private var startedIdentity: com.exkmptracker.model.TrackingIdentity? = null
     private var tickerJob: Job? = null
+    private var cooperative = false
 
     @Synchronized
     internal fun report(message: String, cause: Throwable?) {
@@ -85,6 +87,9 @@ class AndroidTrackerRuntime internal constructor(
     init {
         try {
             val transport = provider.createTrackingTransport(appContext)
+            cooperative = transport is CooperativeTransport
+            val ego = provider.vehicleClass(appContext)
+            val controller = if (ego != null) provider.createEdgeVisionController(appContext) else null
             blocInstance = TrackerBloc(
                 scope = scope,
                 clock = AndroidTrackerClock(),
@@ -99,8 +104,13 @@ class AndroidTrackerRuntime internal constructor(
                 config = provider.trackerConfig(appContext),
                 mapMatcher = provider.createMapMatcher(appContext),
                 cooperativeTransport = transport as? CooperativeTransport,
-                vision = provider.createEdgeVisionController(appContext),
-                vehicleClass = provider.vehicleClass(appContext),
+                vision = controller,
+                vehicleClassSource = { provider.vehicleClass(appContext) },
+                visionBuiltFor = if (controller != null) ego else null,
+                visionFactory = { requested ->
+                    if (provider.vehicleClass(appContext) != requested) null
+                    else provider.createEdgeVisionController(appContext)
+                },
             )
             synchronized(this) {
                 pendingPlatformErrors.forEach { blocInstance.dispatch(TrackerEvent.PlatformError(it)) }
@@ -125,7 +135,9 @@ class AndroidTrackerRuntime internal constructor(
         queue.size(session.identity)
         sessionStore.save(session)
         check(!closed) { "Tracker runtime closed during session save" }
+        refreshVision()
         blocInstance.dispatch(TrackerEvent.Start(session))
+        enableSection2IfReady()
         if (startedIdentity == null) {
             startedIdentity = session.identity
             setStationary(false)
@@ -139,7 +151,9 @@ class AndroidTrackerRuntime internal constructor(
         val session = sessionStore.load() ?: return null
         check(!closed) { "Tracker runtime closed during session restore" }
         queue.size(session.identity)
+        refreshVision()
         blocInstance.dispatch(TrackerEvent.Start(session))
+        enableSection2IfReady()
         startedIdentity = session.identity
         setStationary(false)
         activityRecognition.start()
@@ -213,8 +227,45 @@ class AndroidTrackerRuntime internal constructor(
         tickerJob = scope.launch {
             while (isActive) {
                 delay(TICK_INTERVAL_MS)
+                if (closed) return@launch
+                try {
+                    refreshVision()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    logger.error("Edge vision was not refreshed", error)
+                }
                 if (!closed) blocInstance.dispatch(TrackerEvent.Tick)
             }
+        }
+    }
+
+    /** Reads [AndroidTrackerProvider.vehicleClass] and rebuilds the camera when the class changes. */
+    private suspend fun refreshVision() {
+        if (closed || !::blocInstance.isInitialized) return
+        val ego = provider.vehicleClass(appContext)
+        val installed = blocInstance.visionClass()
+        if (ego == installed) return
+        val controller = if (ego != null) provider.createEdgeVisionController(appContext) else null
+        if (ego != null && controller == null) {
+            if (installed != null || blocInstance.state.value.sections.stage2) {
+                blocInstance.replaceVision(null, null)
+            }
+            return
+        }
+        val built = if (controller != null) ego else null
+        if (built == installed) return
+        blocInstance.replaceVision(controller, built)
+    }
+
+    private suspend fun enableSection2IfReady() {
+        if (!cooperative || blocInstance.visionClass() == null || blocInstance.state.value.sections.stage2) return
+        try {
+            blocInstance.section(2, true)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            logger.error("Section 2 was not started", error)
         }
     }
 
