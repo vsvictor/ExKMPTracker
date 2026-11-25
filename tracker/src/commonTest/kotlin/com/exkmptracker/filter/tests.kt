@@ -380,7 +380,7 @@ class StopAnchorTests {
     @Test fun fixedAnchorDoesNotDriftAndUncertaintyGrows() {
         val stop = StopAnchor()
         stop.begin(estimate())
-        repeat(30) { stop.add(fix(lat = 50.00001 + (it % 2) * 0.00001)) }
+        repeat(30) { stop.add(estimate().copy(latitude = 50.00001 + (it % 2) * 0.00001)) }
         val held = assertNotNull(stop.estimate(31.0))
         val later = assertNotNull(stop.estimate(61.0))
         assertEquals(50.0, held.latitude, 1e-9)
@@ -414,11 +414,26 @@ class StopAnchorTests {
         assertTrue(later.accuracyMeters < assertNotNull(stop.estimate(61.0)).accuracyMeters)
     }
 
-    @Test fun networkAnchorIsReplacedByFirstPreciseFix() {
+    @Test fun anchorUpdatesOnlyForMoreAccurateSmoothedEstimates() {
         val stop = StopAnchor()
-        stop.begin(estimate(LocationSource.network), network = true)
-        stop.add(fix(lat = 50.0001))
-        assertEquals(50.0001, assertNotNull(stop.estimate(2.0)).latitude)
+        stop.begin(estimate())
+        stop.add(estimate().copy(latitude = 50.0001, accuracyMeters = 9.0, monotonicSeconds = 2.0))
+        stop.add(estimate().copy(latitude = 50.0002, accuracyMeters = 8.0, monotonicSeconds = 3.0))
+        assertEquals(50.0, assertNotNull(stop.estimate(3.0, 3.0)).latitude)
+        stop.add(estimate().copy(latitude = 50.0003, accuracyMeters = 5.0, monotonicSeconds = 4.0))
+        val improved = assertNotNull(stop.estimate(4.0, 4.0))
+        assertEquals(50.0003, improved.latitude)
+        assertEquals(5.0, improved.accuracyMeters)
+        stop.add(estimate().copy(latitude = 50.0004, accuracyMeters = 6.0, monotonicSeconds = 5.0))
+        assertEquals(improved.latitude, assertNotNull(stop.estimate(5.0, 5.0)).latitude)
+    }
+
+    @Test fun refiningAnchorDoesNotHideDeparture() {
+        val stop = StopAnchor()
+        stop.begin(estimate())
+        stop.add(estimate().copy(latitude = 50.0003, accuracyMeters = 5.0, monotonicSeconds = 2.0))
+        assertFalse(stop.shouldRelease(fix(time = 3.0, lat = 50.0003, accuracy = 5.0, speed = 1.5)))
+        assertTrue(stop.shouldRelease(fix(time = 4.0, lat = 50.0003, accuracy = 5.0, speed = 1.5)))
     }
 }
 

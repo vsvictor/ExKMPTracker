@@ -5,8 +5,9 @@ import kotlin.math.*
 
 internal class StopAnchor {
     private var anchor: TrackEstimate? = null
+    // Keep departure detection independent of refinements to the displayed position.
+    private var departureAnchor: TrackEstimate? = null
     private var began = 0.0
-    private var fromNetwork = false
     private var departureSamples = 0
 
     val active: Boolean get() = anchor != null
@@ -14,11 +15,11 @@ internal class StopAnchor {
     fun driftMeters(fix: LocationFix): Double? =
         anchor?.let { distanceMeters(it.latitude, it.longitude, fix.latitude, fix.longitude) }
 
-    fun begin(estimate: TrackEstimate, network: Boolean = false) {
+    fun begin(estimate: TrackEstimate) {
         if (active) return
         anchor = estimate.copy(speedMps = 0.0, source = LocationSource.stationary)
+        departureAnchor = anchor
         began = estimate.monotonicSeconds
-        fromNetwork = network
         departureSamples = 0
     }
 
@@ -28,7 +29,7 @@ internal class StopAnchor {
      * the hold radius before the anchor moves and mileage starts again.
      */
     fun shouldRelease(fix: LocationFix): Boolean {
-        val held = anchor ?: return false
+        val held = departureAnchor ?: return false
         if (fix.source == LocationSource.network) return false
         val moved = distanceMeters(held.latitude, held.longitude, fix.latitude, fix.longitude)
         val leaving = fix.speedMps > RELEASE_SPEED_MPS &&
@@ -37,16 +38,11 @@ internal class StopAnchor {
         return departureSamples >= DEPARTURE_SAMPLES
     }
 
-    /**
-     * A precise anchor does not move. Shifting it to a later mean would add a
-     * segment and walk the pin. The one exception is the first GNSS/fused fix
-     * after a network anchor: that replacement is the accurate position.
-     */
-    fun add(fix: LocationFix) {
+    fun add(estimate: TrackEstimate) {
         val held = anchor ?: return
-        if (fix.source == LocationSource.network || !fromNetwork) return
-        anchor = held.copy(latitude = fix.latitude, longitude = fix.longitude, accuracyMeters = fix.accuracyMeters)
-        fromNetwork = false
+        if (estimate.accuracyMeters >= held.accuracyMeters) return
+        anchor = estimate.copy(speedMps = 0.0, source = LocationSource.stationary)
+        began = estimate.monotonicSeconds
     }
 
     /**

@@ -484,7 +484,7 @@ class TrackerBloc(
                         (drift - old.stationaryDriftMeanMeters) / count,
                     stationaryDriftMaxMeters = max(old.stationaryDriftMaxMeters, drift))
             }
-            stop.add(fix)
+            stop.add(estimate)
             record(heldEstimate(now) ?: estimate, null)
         } else {
             record(pinned?.copy(monotonicSeconds = estimate.monotonicSeconds) ?: estimate, fix)
@@ -510,7 +510,7 @@ class TrackerBloc(
                 val held = state.value.autonomousEstimate
                 if (held != null) {
                     filter.stationary()
-                    stop.begin(held.copy(monotonicSeconds = now), raw.source == LocationSource.network)
+                    stop.begin(held.copy(monotonicSeconds = now))
                     heldEstimate(now)?.let { record(it, null) }
                 } else {
                     filter.stationary()
@@ -637,8 +637,7 @@ class TrackerBloc(
         if (value == state.value.activity) return
         if (value == Activity.STILL) {
             filter.stationary()?.let { estimate ->
-                stop.begin(estimate.copy(monotonicSeconds = clock.monotonicSeconds()),
-                    lastRaw?.source == LocationSource.network)
+                stop.begin(estimate.copy(monotonicSeconds = clock.monotonicSeconds()))
             }
         }
         sensors.setStationary(value == Activity.STILL)

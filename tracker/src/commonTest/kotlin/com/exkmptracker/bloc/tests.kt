@@ -241,6 +241,36 @@ class TrackerBlocTests {
         assertEquals(0, f.queue.size(session.identity))
     }
 
+    @Test fun stationaryHeartbeatUsesImprovedFilteredPosition() = runTest {
+        val f = Fixture(backgroundScope)
+        f.bloc.dispatch(TrackerEvent.Start(session))
+        repeat(10) { i ->
+            f.bloc.dispatch(TrackerEvent.Motion(MotionSample(i / 10.0, 0.0, 0.0, 0.01)))
+        }
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.0, 30.0, 20.0, 1000, 1.0,
+            LocationSource.gps, 0.0, 0.0)))
+        runCurrent()
+        val initial = assertNotNull(f.bloc.state.value.estimate)
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+
+        f.clock.now = 2.0
+        f.bloc.dispatch(TrackerEvent.Position(LocationFix(50.00001, 30.0, 4.0, 2000, 2.0,
+            LocationSource.gps, 0.0, 0.0)))
+        runCurrent()
+        val improved = assertNotNull(f.bloc.state.value.estimate)
+        assertTrue(improved.accuracyMeters < initial.accuracyMeters)
+        assertNotEquals(initial.latitude, improved.latitude)
+
+        f.clock.now = 31.0
+        f.bloc.dispatch(TrackerEvent.Tick)
+        runCurrent()
+        val heartbeat = f.transport.batches.flatten().last()
+        assertEquals(LocationSource.stationary, heartbeat.source)
+        assertEquals(improved.latitude, heartbeat.smoothedLatitude, 1e-9)
+        assertEquals(0, f.queue.size(session.identity))
+    }
+
     @Test fun parkedColdStartDoesNotRequireMovingCourseToDetectQuietImu() = runTest {
         val f = Fixture(backgroundScope)
         f.bloc.dispatch(TrackerEvent.Start(session))
