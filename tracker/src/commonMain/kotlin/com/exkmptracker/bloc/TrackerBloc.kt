@@ -765,6 +765,13 @@ class TrackerBloc(
         require(listOf(matched.latitude, matched.longitude, matched.accuracyMeters, matched.speedMps,
             matched.bearingDegrees).all { it.isFinite() } && abs(matched.latitude) <= 90 &&
             abs(matched.longitude) <= 180 && matched.accuracyMeters > 0) { "Invalid map matching result" }
+        val previous = lastStatisticsPoint
+        val distance = previous?.let {
+            distanceMeters(it.smoothedLatitude, it.smoothedLongitude, matched.latitude, matched.longitude)
+        } ?: 0.0
+        val phantomDistance = if (previous?.source == LocationSource.stationary &&
+            matched.source == LocationSource.stationary
+        ) distance else 0.0
         val point = TrackPoint(
             id = idGenerator.newId(),
             rawLatitude = raw?.latitude, rawLongitude = raw?.longitude, rawAccuracyMeters = raw?.accuracyMeters,
@@ -776,17 +783,16 @@ class TrackerBloc(
             observedAtMs = raw?.observedAtMs ?: clock.wallTimeMs(),
             source = matched.source, isMock = raw?.isMock ?: lastRaw?.isMock ?: false,
             flags = activeFlags.sorted(),
+            trackIncrementMeters = distance,
+            phantomIncrementMeters = phantomDistance,
         )
         require(point.id.matches(Regex("[0-9a-f]{32}"))) { "Point ID must be 16 secure random bytes in hex" }
         queue.append(active.identity, point)
-        val previous = lastStatisticsPoint
-        val distance = previous?.let { distanceMeters(it.smoothedLatitude, it.smoothedLongitude, point.smoothedLatitude, point.smoothedLongitude) } ?: 0.0
         val stats = state.value.statistics
         mutableState.value = state.value.copy(statistics = stats.copy(
             enqueuedPoints = stats.enqueuedPoints + 1,
             trackMeters = stats.trackMeters + distance,
-            stationaryTrackMeters = stats.stationaryTrackMeters +
-                if (previous?.source == LocationSource.stationary && point.source == LocationSource.stationary) distance else 0.0,
+            stationaryTrackMeters = stats.stationaryTrackMeters + phantomDistance,
         ))
         lastStatisticsPoint = point
         throttle.recorded(estimate)

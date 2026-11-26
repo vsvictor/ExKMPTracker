@@ -118,6 +118,10 @@ meet the host application's store/privacy requirements.
 counts by reason, points enqueued during the current runtime, and distances between
 successive newly enqueued points. `stationaryTrackMeters` counts only segments whose two
 endpoints are stationary; it includes gradual anchor refinement and is not server mileage.
+Each newly queued point carries `trackIncrementMeters` and `phantomIncrementMeters`:
+the same distance increments used by these counters. The first point after a runtime
+reset has zero increments; older queued points may omit both fields. Deploy a server
+that accepts these fields before updating clients.
 `stationaryDriftMetersBySource` sums each stop's maximum accepted raw-fix displacement
 from that source's first accepted fix at the stop; this is not the distance travelled.
 The dead-reckoning error is measured between the last autonomous prediction and the first

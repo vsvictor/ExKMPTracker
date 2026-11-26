@@ -53,6 +53,8 @@ class TrackerStatisticsTests {
         assertEquals(1L, stats.enqueuedPoints)
         assertEquals(0.0, stats.trackMeters)
         assertEquals(0.0, stats.stationaryTrackMeters)
+        assertEquals(0.0, points.single().trackIncrementMeters)
+        assertEquals(0.0, points.single().phantomIncrementMeters)
         assertNull(stats.serverClockOffsetMs)
 
         bloc.dispatch(TrackerEvent.Gnss(GnssEvidence(now, 99_500.0, meanCn0DbHz = 30.0, strongCn0DbHz = 35.0)))

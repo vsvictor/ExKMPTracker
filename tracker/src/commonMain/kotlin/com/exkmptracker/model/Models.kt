@@ -1,6 +1,8 @@
 package com.exkmptracker.model
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 
 @Serializable
 enum class LocationSource { fused, gps, network, deadReckoning, stationary, cooperative }
@@ -50,6 +52,7 @@ data class TrackEstimate(
 )
 
 @Serializable
+@OptIn(ExperimentalSerializationApi::class)
 data class TrackPoint(
     val id: String,
     val rawLatitude: Double?,
@@ -65,6 +68,8 @@ data class TrackPoint(
     val source: LocationSource,
     val isMock: Boolean,
     val flags: List<String>,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val trackIncrementMeters: Double? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val phantomIncrementMeters: Double? = null,
 )
 
 data class MotionSample(

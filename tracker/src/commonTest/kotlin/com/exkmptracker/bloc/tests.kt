@@ -96,12 +96,15 @@ class TrackerBlocTests {
         f.fix()
         runCurrent()
         assertEquals(0, f.queue.size(session.identity))
+        assertEquals(0.0, f.bloc.state.value.statistics.trackMeters)
+        assertEquals(0.0, f.bloc.state.value.statistics.stationaryTrackMeters)
         assertNotNull(f.bloc.state.value.error)
         f.queue.failAppend = false
         f.clock.now = 2.0
         f.fix()
         runCurrent()
         assertEquals(1, f.queue.size(session.identity))
+        assertEquals(0.0, f.queue.peek(session.identity, 1).single().trackIncrementMeters)
     }
 
     @Test fun acknowledgesOnlyAcceptedFifoPrefix() = runTest {
@@ -118,6 +121,15 @@ class TrackerBlocTests {
             LocationSource.gps, 8.0, 0.0)))
         runCurrent()
         val original = f.queue.peek(session.identity, 100)
+        assertEquals(3, original.size)
+        assertEquals(0.0, original.first().trackIncrementMeters)
+        original.zipWithNext { previous, point ->
+            val distance = com.exkmptracker.filter.distanceMeters(previous.smoothedLatitude, previous.smoothedLongitude,
+                point.smoothedLatitude, point.smoothedLongitude)
+            assertEquals(distance, assertNotNull(point.trackIncrementMeters), 1e-9)
+            assertEquals(0.0, point.phantomIncrementMeters)
+        }
+        assertEquals(original.sumOf { assertNotNull(it.trackIncrementMeters) }, f.bloc.state.value.statistics.trackMeters, 1e-9)
         f.transport.accepted = { listOf(it[0].id, it[2].id) }
         f.bloc.dispatch(TrackerEvent.Tick)
         runCurrent()
@@ -315,6 +327,10 @@ class TrackerBlocTests {
         }
         assertTrue(distances.any { it > 0.1 })
         assertTrue(distances.all { it <= 1.000001 })
+        points.drop(1).zip(distances).forEach { (point, distance) ->
+            assertEquals(distance, assertNotNull(point.trackIncrementMeters), 1e-9)
+            assertEquals(distance, assertNotNull(point.phantomIncrementMeters), 1e-9)
+        }
         assertTrue(points.drop(1).all { it.rawLatitude == 50.00009 && it.observedAtMs == 2_000L })
     }
 

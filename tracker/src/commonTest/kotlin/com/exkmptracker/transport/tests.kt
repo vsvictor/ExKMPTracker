@@ -37,6 +37,22 @@ class RpcTrackingTransportTests {
         val encoded = params["points"]!!.jsonArray.single().jsonObject
         assertEquals(JsonNull, encoded["rawLatitude"])
         assertEquals("deadReckoning", encoded["source"]!!.jsonPrimitive.content)
+        assertFalse("trackIncrementMeters" in encoded)
+        assertFalse("phantomIncrementMeters" in encoded)
+    }
+
+    @Test fun preservesMileageIncrementsOnUploadAndRetry() = runTest {
+        val measured = point.copy(trackIncrementMeters = 12.5, phantomIncrementMeters = 3.0)
+        val rpc = Rpc(buildJsonObject { putJsonArray("acceptedIds") { add(point.id) } })
+        val transport = RpcTrackingTransport(rpc)
+        transport.ingest(session, listOf(measured))
+        transport.ingest(session, listOf(measured))
+        val first = rpc.requests.first().second["points"]!!.jsonArray.single().jsonObject
+        val second = rpc.requests.last().second["points"]!!.jsonArray.single().jsonObject
+        assertEquals(12.5, first["trackIncrementMeters"]!!.jsonPrimitive.double)
+        assertEquals(3.0, first["phantomIncrementMeters"]!!.jsonPrimitive.double)
+        assertEquals(first, second)
+        assertEquals(point, Json.decodeFromString<TrackPoint>(Json.encodeToString(TrackPoint.serializer(), point)))
     }
 
     @Test fun acceptsPartialAcknowledgementsButRejectsForeignOrDuplicateIds() = runTest {
